@@ -1,0 +1,338 @@
+---
+title: "univariate_RV(c)+RV(d)"
+author: "CID: 01714151"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Define functions to distinct jump and diffusive parts on thresholds
+```{r}
+summary3 <- function(dat_flat, time_func, jump_threshold){
+  dat_summary <- dat_flat %>%
+    # Add a column which represents the date/month of the dataset
+    mutate(date=time_func(datetime)) %>%
+    # Change the index and group by date
+    index_by(date) %>%
+    group_by(date) %>%
+    # get the average price, RVol, P(RVol), N(RVol)
+    summarize(currency = first(currency),
+              avg_price = mean(price),
+              rvol = sqrt(sum(log_return^2)),
+              #BV_threshold = sqrt(sum(bpv)*mu1^(-2)),
+              rvol_c = sqrt(sum(log_return[abs(log_return) <= jump_threshold]^2)),
+              rvol_d = sqrt(sum(log_return[abs(log_return) > jump_threshold]^2)),
+              P_rvol_c = sqrt(sum(log_return[(log_return>0) & (abs(log_return) <= jump_threshold)]^2)),
+              P_rvol_d = sqrt(sum(log_return[(log_return>0) & (abs(log_return) > jump_threshold)]^2)),
+              N_rvol_c = sqrt(sum(log_return[(log_return<0) & (abs(log_return) <= jump_threshold)]^2)),
+              N_rvol_d = sqrt(sum(log_return[(log_return<0) & (abs(log_return) > jump_threshold)]^2)))
+  return(dat_summary)
+}
+
+#const_threshold<- function(const){return(const)}
+#BV_threshold<- function(alpha){alpha*sqrt(EU_daily2$rbpv*mu1^(-2))*(1/288)^0.49}
+```
+
+## HAR
+### Seperate and explore RV_c and RV_d
+```{r}
+# Obtain daily summary for FX pairs which include the test statistic and corresponding critival values
+EU_daily3 <- summary3(EU_flat, lubridate::date, jump_threshold = 0.002)
+#AU_daily3 <- summary3(AU_flat, lubridate::date, jump_threshold = 0.005)
+length(EU_daily3$rvol_d[EU_daily3$rvol_d != 0])
+
+acf(EU_daily3$rvol_c, lag.max=30, main="EURUSD Daily Realized Vol (continous), 2022 May - 2023 Apr")
+acf(EU_daily3$rvol_d, lag.max=30, main="EURUSD Daily Realized Vol (discontinous), 2022 May - 2023 Apr")
+```
+
+### HAR_RV_c in-sample forecasting for $\sigma^2$
+```{r}
+EU_HAR_in_model_c <- comp_har_pred(23, 256, log(EU_daily3$rvol_c^2))$model
+EU_HAR_in_model_c$coefficients
+base::summary(EU_HAR_in_model_c)$adj.r.squared
+EU_HAR_inpred_c <- data.frame(date=EU_daily$date[24:257], pred = predict(EU_HAR_in_model_c), true = log(EU_daily3$rvol_c[24:257]^2))
+
+# Plot the HAR in-sample forecast
+EU_HAR_inpred_c_plot <- ggplot(data=EU_HAR_inpred_c, aes(x=date)) +
+  geom_line(aes(y=true, color='True RVol_c')) +
+  geom_line(aes(y=pred, color='in-sample pred')) +
+  scale_color_manual(name=NULL, values=c('True RVol_c' = 'darkgrey', "in-sample pred" = "steelblue")) +
+  ggtitle("HAR in-sample Forecast for diffusive parts on EURUSD from 2022 May - 2023 Apr") +
+  ylab("RVol") +
+  theme_classic()
+
+EU_HAR_inpred_c_plot
+```
+### HAR_RV_c Out-of-sample forecasting for $\sigma^2$
+```{r echo=FALSE}
+# Obtain the one-day out-of-sample forecast and 0.95 CI of the rolling window
+EU_HAR_outpred_c <- data.frame(do.call(rbind, lapply(EU_roll_start:EU_roll_end, function(x){comp_har_pred(x-train_length, x, log(EU_daily3$rvol_c^2))$pred})), row.names = NULL)
+EU_HAR_outpred_c$date = EU_daily3$date[(EU_roll_start+2) : (EU_roll_end+2)]
+EU_HAR_outpred_c$true = log(EU_daily3$rvol_c[(EU_roll_start+2) : (EU_roll_end+2)]^2)
+
+mean((EU_HAR_inpred_c$pred - EU_HAR_inpred_c$true)^2)
+mean((EU_HAR_outpred_c$true - EU_HAR_outpred_c$fit)^2)
+
+# Plot the HAR out-of-sample forecast
+EU_daily3_23 <- EU_daily3[year(EU_daily3$date)==2023,]
+EU_HAR_outpred_plot_c <- ggplot() +
+  geom_line(data=data.frame(x=EU_daily3_23$date, y=log(EU_daily3_23$rvol_c^2)), 
+            aes(x = x, y = y, color = "realized √BPV/µ1")) +
+  geom_line(data=data.frame(x=EU_HAR_outpred_c$date, y=EU_HAR_outpred_c$fit), 
+            aes(x = x, y = y, color = "HAR pred")) +
+  geom_ribbon(data=data.frame(x=EU_HAR_outpred_c$date, lwr=EU_HAR_outpred_c$lwr, upr = EU_HAR_outpred_c$upr), aes(x = x, ymin = lwr, ymax=upr), fill = "lightblue", alpha=0.3) +
+  scale_color_manual(name=NULL, values=c('realized √BPV/µ1' = 'darkgrey', "HAR pred" = "darkblue")) +
+  theme_classic() +
+  ggtitle("HAR Out-of-sample Forecast (with 95% CI) on diffusive parts of EURUSD from 2023 Mar - Apr") +
+  xlab("date") + ylab("BPV")
+
+EU_HAR_outpred_plot_c
+```
+### HAR, dHAR and naive in-sample prediction for J(ump)
+```{r}
+# Estimate the model HAR_J
+EU_HAR_in_model_d <- comp_har_pred(23, 256, log(EU_daily3$rvol_d^2+1e-6))$model
+EU_HAR_in_model_d$coefficients
+base::summary(EU_HAR_in_model_d)$adj.r.squared
+
+# Estimate the model dHAR_J
+EU_dHAR_in_model_d <- comp_dhar_pred(23, 256, log(EU_daily3$rvol_d^2+1e-6))$model
+EU_dHAR_in_model_d$coefficients
+base::summary(EU_dHAR_in_model_d)$adj.r.squared
+
+# Estimate the model Naive_J
+EU_naive_in_d <- log(EU_daily3$rvol_d[23:256]^2)
+```
+
+### HAR RV_c+RV_d in-sample forecast
+```{r}
+# HAR_BPV + HAR_J
+EU_HAR_inpred_cd <- data.frame(date=EU_daily3$date[24:257], true=log(EU_daily3$rvol[24:257]^2),
+                               HAR_pred=log(exp(predict(EU_HAR_in_model_c)) +
+                                              exp(predict(EU_HAR_in_model_d)-1e-6)),
+                               dHAR_pred=log(exp(predict(EU_HAR_in_model_c)) +
+                                                exp(predict(EU_dHAR_in_model_d))-1e-6),
+                               naive_pred=log(exp(predict(EU_HAR_in_model_c)) + exp(EU_naive_in_d)))
+
+# Plot the HAR in-sample forecast
+EU_HAR_inpred_plot_cd <- ggplot(data=EU_HAR_inpred_cd, aes(x=date)) +
+  geom_line(aes(y=true, color='RVol')) +
+  geom_line(aes(y=HAR_pred, color='in-sample pred')) +
+  scale_color_manual(name=NULL, values=c('RVol' = 'darkgrey', "in-sample pred" = "steelblue")) +
+  ggtitle("HAR in-sample Forecast for diffusive parts on EURUSD from 2022 May - 2023 Apr") +
+  ylab("BPV+J") +
+  theme_classic()
+
+EU_HAR_inpred_plot_cd
+
+EU_dHAR_inpred_plot_cd <- ggplot(data=EU_HAR_inpred_cd, aes(x=date)) +
+  geom_line(aes(y=true, color='RVol')) +
+  geom_line(aes(y=dHAR_pred, color='in-sample pred')) +
+  scale_color_manual(name=NULL, values=c('RVol' = 'darkgrey', "in-sample pred" = "steelblue")) +
+  ggtitle("HAR in-sample Forecast for diffusive parts on EURUSD from 2022 May - 2023 Apr") +
+  ylab("BPV+J") +
+  theme_classic()
+
+EU_dHAR_inpred_plot_cd
+
+EU_naive_inpred_plot_cd <- ggplot(data=EU_HAR_inpred_cd, aes(x=date)) +
+  geom_line(aes(y=true, color='RVol')) +
+  geom_line(aes(y=naive_pred, color='in-sample pred')) +
+  scale_color_manual(name=NULL, values=c('RVol' = 'darkgrey', "in-sample pred" = "steelblue")) +
+  ggtitle("HAR in-sample Forecast for diffusive parts on EURUSD from 2022 May - 2023 Apr") +
+  ylab("BPV+J") +
+  theme_classic()
+
+EU_naive_inpred_plot_cd
+```
+
+### HAR, dHAR and naive out-of-sample prediction for RV_d
+```{r}
+EU_HAR_outpred_d <- data.frame(do.call(rbind, lapply(EU_roll_start:EU_roll_end, function(x){comp_har_pred(x-train_length, x, log(EU_daily3$rvol_d^2+1e-6))$pred})), row.names = NULL)
+EU_dHAR_outpred_d <- data.frame(do.call(rbind, lapply(EU_roll_start:EU_roll_end, function(x){comp_dhar_pred(x-train_length, x, log(EU_daily3$rvol_d^2+1e-6))$pred})), row.names = NULL)
+EU_naive_outpred_d <- log(EU_daily3$rvol_d[(EU_roll_start+1): (EU_roll_end+1)]^2)
+```
+
+### HAR RV_c+RV_d out-of-sample forecast
+```{r}
+# Obtain the one-day out-of-sample forecast of the rolling window
+EU_HAR_outpred_cd <- data.frame(date=EU_daily3$date[(EU_roll_start+2) : (EU_roll_end+2)],
+                                true=log(EU_daily3$rvol[(EU_roll_start+2) : (EU_roll_end+2)]^2),
+                                HAR_pred=log(exp(EU_HAR_outpred_c$fit)+exp(EU_HAR_outpred_d$fit)-1e-6),
+                                dHAR_pred=log(exp(EU_HAR_outpred_c$fit)+exp(EU_dHAR_outpred_d$fit)-1e-6),
+                                naive_pred=log(exp(EU_HAR_outpred_c$fit)+exp(EU_naive_outpred_d)))
+
+# Plot the HAR out-of-sample forecast
+EU_HAR_outpred_plot_cd <- ggplot() +
+  geom_line(data=data.frame(x=EU_daily3_23$date, y=log(EU_daily3_23$rvol^2)), 
+            aes(x = x, y = y, color = "Rvol")) +
+  geom_line(data=data.frame(x=EU_HAR_outpred_cd$date, y=EU_HAR_outpred_cd$HAR_pred), 
+            aes(x = x, y = y, color = "HAR pred")) +
+  geom_line(data=data.frame(x=EU_HAR_outpred_cd$date, y=EU_HAR_outpred_cd$dHAR_pred), 
+            aes(x = x, y = y, color = "dHAR pred")) +
+  geom_line(data=data.frame(x=EU_HAR_outpred_cd$date, y=EU_HAR_outpred_cd$naive_pred), 
+            aes(x = x, y = y, color = "naive pred")) +
+  scale_color_manual(name=NULL, values=c('Rvol' = 'darkgrey', "HAR pred" = "blue3", 
+                                         "dHAR pred"='steelblue', 'naive pred'='cyan2')) +
+  theme_classic() +
+  ggtitle("HAR Out-of-sample Forecast (with 95% CI) on diffusive parts of EURUSD from 2023 Mar - Apr") +
+  xlab("date") + ylab("BPV")
+
+EU_HAR_outpred_plot_cd
+```
+
+## SHAR
+### Seperate and explore P/N_RV_c and P/N_RV_d
+```{r}
+# Obtain daily summary for FX pairs which include the test statistic and corresponding critival values
+EU_daily3 <- summary3(EU_flat, lubridate::date, jump_threshold = 0.002)
+#AU_daily3 <- summary3(AU_flat, lubridate::date, jump_threshold = 0.005)
+#length(EU_daily3$rvol_d[EU_daily3$rvol_d != 0])
+
+acf(EU_daily3$P_rvol_c, lag.max=30, main="EURUSD Daily RVol+ (continous), 2022 May - 2023 Apr")
+acf(EU_daily3$P_rvol_d, lag.max=30, main="EURUSD Daily RVol+ (discontinous), 2022 May - 2023 Apr")
+acf(EU_daily3$N_rvol_c, lag.max=30, main="EURUSD Daily RVol- (continous), 2022 May - 2023 Apr")
+acf(EU_daily3$N_rvol_d, lag.max=30, main="EURUSD Daily RVol- (discontinous), 2022 May - 2023 Apr")
+```
+
+### SHAR_RV_c in-sample forecasting for $\sigma^2$
+```{r}
+EU_SHAR_in_model_c <- comp_shar_pred(23, 256, log(EU_daily3$rvol_c^2), log(EU_daily3$P_rvol_c^2), log(EU_daily3$N_rvol_c^2))$model
+EU_SHAR_in_model_c$coefficients
+base::summary(EU_SHAR_in_model_c)$adj.r.squared
+EU_SHAR_inpred_c <- data.frame(date=EU_daily$date[24:257], pred = predict(EU_SHAR_in_model_c), true = log(EU_daily3$rvol_c[24:257]^2))
+
+# Plot the HAR in-sample forecast
+EU_SHAR_inpred_c_plot <- ggplot(data=EU_SHAR_inpred_c, aes(x=date)) +
+  geom_line(aes(y=true, color='True RVol_c')) +
+  geom_line(aes(y=pred, color='in-sample pred')) +
+  scale_color_manual(name=NULL, values=c('True RVol_c' = 'darkgrey', "in-sample pred" = "steelblue")) +
+  ggtitle("HAR in-sample Forecast for diffusive parts on EURUSD from 2022 May - 2023 Apr") +
+  ylab("RVol") +
+  theme_classic()
+
+EU_SHAR_inpred_c_plot
+```
+
+### SHAR_RV_c Out-of-sample forecasting for $\sigma^2$
+```{r echo=FALSE}
+# Obtain the one-day out-of-sample forecast and 0.95 CI of the rolling window
+EU_SHAR_outpred_c <- data.frame(do.call(rbind, lapply(EU_roll_start:EU_roll_end, function(x){comp_shar_pred(x-train_length, x, log(EU_daily3$rvol_c^2), log(EU_daily3$P_rvol_c^2), log(EU_daily3$N_rvol_c)^2)$pred})), row.names = NULL)
+EU_SHAR_outpred_c$date = EU_daily3$date[(EU_roll_start+2) : (EU_roll_end+2)]
+EU_SHAR_outpred_c$true = log(EU_daily3$rvol_c[(EU_roll_start+2) : (EU_roll_end+2)]^2)
+
+mean((EU_SHAR_inpred_c$pred - EU_SHAR_inpred_c$true)^2)
+mean((EU_SHAR_outpred_c$true - EU_SHAR_outpred_c$fit)^2)
+
+# Plot the HAR out-of-sample forecast
+EU_daily3_23 <- EU_daily3[year(EU_daily3$date)==2023,]
+EU_SHAR_outpred_plot_c <- ggplot() +
+  geom_line(data=data.frame(x=EU_daily3_23$date, y=log(EU_daily3_23$rvol_c^2)), 
+            aes(x = x, y = y, color = "realized √BPV/µ1")) +
+  geom_line(data=data.frame(x=EU_SHAR_outpred_c$date, y=EU_SHAR_outpred_c$fit), 
+            aes(x = x, y = y, color = "HAR pred")) +
+  geom_ribbon(data=data.frame(x=EU_SHAR_outpred_c$date, lwr=EU_SHAR_outpred_c$lwr, upr = EU_SHAR_outpred_c$upr), aes(x = x, ymin = lwr, ymax=upr), fill = "lightblue", alpha=0.3) +
+  scale_color_manual(name=NULL, values=c('realized √BPV/µ1' = 'darkgrey', "HAR pred" = "darkblue")) +
+  theme_classic() +
+  ggtitle("HAR Out-of-sample Forecast (with 95% CI) on diffusive parts of EURUSD from 2023 Mar - Apr") +
+  xlab("date") + ylab("BPV")
+
+EU_SHAR_outpred_plot_c
+```
+### SHAR, dSHAR and naive in-sample prediction for RV_d
+```{r}
+# Estimate the model HAR_J
+EU_SHAR_in_model_d <- comp_shar_pred(23, 256, log(EU_daily3$rvol_d^2+1e-6), log(EU_daily3$P_rvol_d^2+1e-6), log(EU_daily3$N_rvol_d^2+1e-6))$model
+EU_SHAR_in_model_d$coefficients
+base::summary(EU_SHAR_in_model_d)$adj.r.squared
+
+# Estimate the model dHAR_J
+EU_dSHAR_in_model_d <- comp_dshar_pred(23, 256, log(EU_daily3$rvol_d^2+1e-6), log(EU_daily3$P_rvol_d^2+1e-6), log(EU_daily3$N_rvol_d^2+1e-6))$model
+EU_dSHAR_in_model_d$coefficients
+base::summary(EU_dSHAR_in_model_d)$adj.r.squared
+
+# Estimate the model Naive_J
+EU_naive_in_d <- log(EU_daily3$rvol_d[23:256]^2)
+```
+### SHAR RV_c+RV_d in-sample forecast
+```{r}
+# HAR_BPV + HAR_J
+EU_SHAR_inpred_cd <- data.frame(date=EU_daily3$date[24:257], true=log(EU_daily3$rvol[24:257]^2),
+                                SHAR_pred=log(exp(predict(EU_SHAR_in_model_c)) +
+                                                 exp(predict(EU_SHAR_in_model_d))-1e-6),
+                                dSHAR_pred=log(exp(predict(EU_SHAR_in_model_c)) +
+                                                  exp(predict(EU_dSHAR_in_model_d))-1e-6),
+                                naive_pred=log(exp(predict(EU_SHAR_in_model_c)) + exp(EU_naive_in_d)))
+
+# Plot the HAR in-sample forecast
+EU_SHAR_inpred_plot_cd <- ggplot(data=EU_SHAR_inpred_cd, aes(x=date)) +
+  geom_line(aes(y=true, color='RVol')) +
+  geom_line(aes(y=SHAR_pred, color='in-sample pred')) +
+  scale_color_manual(name=NULL, values=c('RVol' = 'darkgrey', "in-sample pred" = "steelblue")) +
+  ggtitle("HAR in-sample Forecast for diffusive parts on EURUSD from 2022 May - 2023 Apr") +
+  ylab("BPV+J") +
+  theme_classic()
+
+EU_SHAR_inpred_plot_cd
+
+EU_dSHAR_inpred_plot_cd <- ggplot(data=EU_SHAR_inpred_cd, aes(x=date)) +
+  geom_line(aes(y=true, color='RVol')) +
+  geom_line(aes(y=dSHAR_pred, color='in-sample pred')) +
+  scale_color_manual(name=NULL, values=c('RVol' = 'darkgrey', "in-sample pred" = "steelblue")) +
+  ggtitle("HAR in-sample Forecast for diffusive parts on EURUSD from 2022 May - 2023 Apr") +
+  ylab("BPV+J") +
+  theme_classic()
+
+EU_dSHAR_inpred_plot_cd
+
+EU_naive_inpred_plot_cd <- ggplot(data=EU_SHAR_inpred_cd, aes(x=date)) +
+  geom_line(aes(y=true, color='RVol')) +
+  geom_line(aes(y=naive_pred, color='in-sample pred')) +
+  scale_color_manual(name=NULL, values=c('RVol' = 'darkgrey', "in-sample pred" = "steelblue")) +
+  ggtitle("HAR in-sample Forecast for diffusive parts on EURUSD from 2022 May - 2023 Apr") +
+  ylab("BPV+J") +
+  theme_classic()
+
+EU_naive_inpred_plot_cd
+```
+### SHAR, dSHAR and naive out-of-sample prediction for RV_d
+```{r}
+EU_SHAR_outpred_d <- data.frame(do.call(rbind, lapply(EU_roll_start:EU_roll_end, function(x){comp_shar_pred(x-train_length, x, log(EU_daily3$rvol_d^2+1e-6), log(EU_daily3$P_rvol_d^2 + 1e-6), log(EU_daily3$N_rvol_d^2+1e-6))$pred})), row.names = NULL)
+
+EU_dSHAR_outpred_d <- data.frame(do.call(rbind, lapply(EU_roll_start:EU_roll_end, function(x){comp_dshar_pred(x-train_length, x, log(EU_daily3$rvol_d^2+1e-6), log(EU_daily3$P_rvol_d^2+1e-6), log(EU_daily3$N_rvol_d^2+1e-6))$pred})), row.names = NULL)
+
+EU_naive_outpred_d <- log(EU_daily3$rvol_d[(EU_roll_start+1): (EU_roll_end+1)]^2)
+```
+
+### SHAR RV_c+RV_d out-of-sample forecast
+```{r}
+# Obtain the one-day out-of-sample forecast of the rolling window
+EU_SHAR_outpred_cd <- data.frame(date=EU_daily3$date[(EU_roll_start+2) : (EU_roll_end+2)],
+                                 true=log(EU_daily3$rvol[(EU_roll_start+2) : (EU_roll_end+2)]^2),
+                                 SHAR_pred=log(exp(EU_HAR_outpred_c$fit)+exp(EU_HAR_outpred_d$fit)-1e-6),
+                                 dSHAR_pred=log(exp(EU_HAR_outpred_c$fit)+exp(EU_dHAR_outpred_d$fit)-1e-6),
+                                 naive_pred=log(exp(EU_HAR_outpred_c$fit)+exp(EU_naive_outpred_d)))
+
+# Plot the HAR out-of-sample forecast
+EU_SHAR_outpred_plot_cd <- ggplot() +
+  geom_line(data=data.frame(x=EU_daily3_23$date, y=log(EU_daily3_23$rvol^2)), 
+            aes(x = x, y = y, color = "Rvol")) +
+  geom_line(data=data.frame(x=EU_SHAR_outpred_cd$date, y=EU_SHAR_outpred_cd$SHAR_pred), 
+            aes(x = x, y = y, color = "HAR pred")) +
+  geom_line(data=data.frame(x=EU_SHAR_outpred_cd$date, y=EU_SHAR_outpred_cd$dSHAR_pred), 
+            aes(x = x, y = y, color = "dHAR pred")) +
+  geom_line(data=data.frame(x=EU_SHAR_outpred_cd$date, y=EU_SHAR_outpred_cd$naive_pred), 
+            aes(x = x, y = y, color = "naive pred")) +
+  scale_color_manual(name=NULL, values=c('Rvol' = 'darkgrey', "HAR pred" = "blue3", 
+                                         "dHAR pred"='steelblue', 'naive pred'='cyan2')) +
+  theme_classic() +
+  ggtitle("HAR Out-of-sample Forecast (with 95% CI) on diffusive parts of EURUSD from 2023 Mar - Apr") +
+  xlab("date") + ylab("BPV")
+
+EU_SHAR_outpred_plot_cd
+```
