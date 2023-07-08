@@ -1,0 +1,227 @@
+---
+title: "Exploritory analysis"
+author: "CID: 01714151"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r include=FALSE}
+library(dplyr)
+library(magrittr)
+library(purrr)
+library(lubridate)
+library(tsibble)
+library(ggplot2)
+library(feasts)
+```
+
+
+## Load and clean EURUSD, AUDUSD data
+```{r echo=FALSE}
+# Define column names for the data set 
+col_name <- c("currency", "datetime", "bid", "ask")
+# Define function that help clean the data set
+clean_data <- function(file, time_int = "5 mins", drop_nrow = 30){
+  # Read data set from the csv file
+  dat <- readr::read_csv(file=file, col_names = col_name, show_col_types = FALSE)
+  # Round the milliseconds into defined time intervals
+  dat$datetime <- floor_date(dat$datetime, unit=time_int)
+  dat <- dat %>% 
+    distinct(dat$datetime, .keep_all = TRUE) %>% 
+    select(-last_col()) %>% # Drop the last column which is repetitive
+    mutate(price = (bid+ask)/2) %>% # Obtain the price by averaging the bid-ask price
+    mutate(log_return = log(price) - lag(log(price))) %>% # Compute the log return
+    mutate(bpv = abs(log_return*lag(log_return))) %>% # Compute the bipower variation element
+    mutate(qpv = abs(log_return*lag(log_return)*lag(log_return,2)*lag(log_return,3))) %>% # Compute quadpower variation element
+    select("currency", "datetime", "price", "log_return", "bpv", "qpv") %>%
+    na.omit() %>%
+    as_tsibble(index = datetime)
+  dat_wk <- split(dat, cut(dat$datetime, breaks = "week")) # Split weekly data
+  dat <- map(dat_wk, ~slice(.x, (drop_nrow+1):n())) # Drop first n rows to get rid of over-weekend rate change
+  dat_flat <- bind_rows(dat)
+  dat <- split(dat_flat, cut(dat_flat$datetime, breaks = "day")) # Split daily data
+  return(dat)
+}
+```
+
+```{r echo=FALSE}
+# Clean EURUSD data
+EU_file_names <- 
+  c(here::here("data", "EURUSD", "EURUSD-2022-05.csv"), here::here("data", "EURUSD", "EURUSD-2022-06.csv"),
+    here::here("data", "EURUSD", "EURUSD-2022-07.csv"), here::here("data", "EURUSD", "EURUSD-2022-08.csv"),
+    here::here("data", "EURUSD", "EURUSD-2022-09.csv"), here::here("data", "EURUSD", "EURUSD-2022-10.csv"),
+    here::here("data", "EURUSD", "EURUSD-2022-11.csv"), here::here("data", "EURUSD", "EURUSD-2022-12.csv"),
+    here::here("data", "EURUSD", "EURUSD-2023-01.csv"), here::here("data", "EURUSD", "EURUSD-2023-02.csv"),
+    here::here("data", "EURUSD", "EURUSD-2023-03.csv"), here::here("data", "EURUSD", "EURUSD-2023-04.csv"))
+# Drop the first 30 min for every week start to get rid of over-weekend rate change
+EU_dat <- lapply(EU_file_names, function(x){clean_data(x, time_int="5 mins", drop_nrow=6)}) %>% flatten()
+# Drop days with less than 100 rows of data (weekends)
+EU_dat <- EU_dat %>% keep(~nrow(.x) >= 100)
+EU_dat$`2023-01-13` = EU_dat$`2023-01-13`[-(1:6),]
+```
+
+```{r echo=FALSE}
+# Clean AUDUSD data
+AU_file_names<-
+  c(here::here("data", "AUDUSD", "AUDUSD-2022-05.csv"), here::here("data", "AUDUSD", "AUDUSD-2022-06.csv"),
+    here::here("data", "AUDUSD", "AUDUSD-2022-07.csv"), here::here("data", "AUDUSD", "AUDUSD-2022-08.csv"),
+    here::here("data", "AUDUSD", "AUDUSD-2022-09.csv"), here::here("data", "AUDUSD", "AUDUSD-2022-10.csv"),
+    here::here("data", "AUDUSD", "AUDUSD-2022-11.csv"), here::here("data", "AUDUSD", "AUDUSD-2022-12.csv"),
+    here::here("data", "AUDUSD", "AUDUSD-2023-01.csv"), here::here("data", "AUDUSD", "AUDUSD-2023-02.csv"),
+    here::here("data", "AUDUSD", "AUDUSD-2023-03.csv"), here::here("data", "AUDUSD", "AUDUSD-2023-04.csv"))
+AU_dat <- lapply(AU_file_names, function(x){clean_data(x, time_int='5 mins', drop_nrow=6)}) %>% flatten()
+# Drop days with less than 100 rows of data (weekends)
+AU_dat <-AU_dat %>% keep(~nrow(.x) >= 100)
+AU_dat$`2023-01-13` = AU_dat$`2023-01-13`[-(1:6),]
+```
+
+## Explore the biggest jump of EUR/AUD over the past one year
+This morning brought the release of CPI data (8:30 ET/ 13:30 UTC) out of the US for the month of October. The data came in well-below expectations, with Core CPI coming in at 6.3% against an expectation of 6.5% and headline CPI printing at 7.7% versus an 8.2% expectation. This has led to a massive move already, with an instant fall in the US Dollar that helped to push EUR/USD back-above parity. 
+(source: https://www.dailyfx.com/news/forex-fx-gold-stocks-usd-slammed-gold-and-eurusd-jump-after-cpi-20221110.html)
+```{r echo=FALSE}
+# find the biggest jump in EURUSD in the past one year
+EU_flat <- bind_rows(EU_dat)
+EU_flat[which.max(abs(EU_flat$log_return)), ]
+# plot the EURUSD price on the day with the biggest jump
+EU_dat$`2022-11-10` %>% autoplot(price) + 
+  labs(title="EURUSD rate on 2022 Nov 10", y="EURUSD", x="time (by 5 mins)") +
+  theme_classic() +
+  theme(axis.title = element_text(size= 12.5),
+        axis.text = element_text(size= 11.5),
+        legend.title = element_text(size= 11),
+        legend.text = element_text(size= 11))
+
+# find the biggest jump in AUDUSD in the past one year
+AU_flat <- bind_rows(AU_dat)
+AU_flat[which.max(abs(AU_flat$log_return)), ]
+# plot the AUDUSD price on the day with the biggest jump
+AU_dat$`2022-10-13` %>% autoplot(price) +
+  labs(title="AUDUSD rate on 2022 Oct 13", y="AUDUSD", x="time (∆n = 5 min)") +
+  theme_classic() +
+  theme(axis.title = element_text(size= 12.5),
+        axis.text = element_text(size= 11.5),
+        legend.title = element_text(size= 11),
+        legend.text = element_text(size= 11))
+```
+## Get daily data summary
+```{r echo=FALSE}
+# Extract the row at 14:00 for each data frame in the list
+#EU_daily <- lapply(EU_dat, function(df) df[(hour(df$datetime) == 14) & (minute(df$datetime) == 0), ])
+# Contruct a summary function for different time periods
+summary <- function(dat_flat, time_func){
+  dat_summary <- dat_flat %>%
+    # Add a column which represents the date/month of the dataset
+    mutate(date=time_func(datetime)) %>%
+    # Change the index and group by date
+    index_by(date) %>%
+    group_by(date) %>%
+    # get the average price, RVol, P(RVol), N(RVol)
+    summarize(currency = first(currency),
+              avg_price = mean(price) ,
+              rvol = sqrt(sum(log_return^2)), 
+              P_rvol = sqrt(sum(log_return[log_return>0]^2)), 
+              N_rvol = sqrt(sum(log_return[log_return<0]^2)))
+  return(dat_summary)
+}
+EU_daily <- summary(EU_flat, lubridate::date)
+AU_daily <- summary(AU_flat, lubridate::date)
+```
+
+## Explore correlation between EURUSD and AUDUSD rates
+```{r echo=FALSE}
+ggplot(data.frame(date=EU_daily$date, EURUSD=EU_daily$avg_price, AUDUSD=AU_daily$avg_price), 
+       aes(x = date)) +
+  geom_line(aes(y=EURUSD, color='EURUSD')) +
+  geom_line(aes(y=AUDUSD*1.5, color='AUDUSD')) +
+  scale_y_continuous(name = "EURUSD",
+                     sec.axis = sec_axis(trans=~./1.5, name="AUDUSD")) +
+  scale_color_manual(name=NULL, values=c('EURUSD' = 'steelblue', "AUDUSD" = "orange")) +
+  #ggtitle("Daily Average Rate of Currency Pairs from 2022 May - 2023 Apr") +
+  xlab("Date") +
+  theme_classic() +
+  theme(axis.title = element_text(size= 12.5),
+        axis.text = element_text(size= 11.5),
+        legend.title = element_text(size= 11),
+        legend.text = element_text(size= 11),
+        legend.position = c(0.85, 0.15))
+
+```
+
+## Volatility plot
+```{r echo=FALSE}
+ggplot(data.frame(date=EU_daily$date, EURUSD=EU_daily$rvol, AUDUSD=AU_daily$rvol), 
+       aes(x = date)) +
+  geom_line(aes(y=EURUSD, color='EURUSD')) +
+  geom_line(aes(y=AUDUSD, color='AUDUSD')) +
+  scale_color_manual(name=NULL, values=c('EURUSD' = 'steelblue', "AUDUSD" = "orange")) +
+  #ggtitle("Daily Realized Volatility (RVol) of FX Pairs, 2022 May - 2023 Apr") +
+  xlab("Date") +
+  ylab("RVol value") +
+  theme_classic() +
+  theme(axis.title = element_text(size= 12.5),
+        axis.text = element_text(size= 11.5),
+        legend.title = element_text(size= 11),
+        legend.text = element_text(size= 11),
+        legend.position = c(0.9, 0.85))
+```
+
+## P(RV) and N(RV) plot
+```{r echo=FALSE}
+ggplot(data.frame(date=EU_daily$date, EURUSD=EU_daily$rvol, 
+                  P_EURUSD = EU_daily$P_rvol, N_EURUSD=EU_daily$N_rvol), aes(x = date)) +
+  #geom_line(aes(y=EURUSD, color='RVol')) +
+  geom_line(aes(y=P_EURUSD, color='P(RVol)')) +
+  geom_line(aes(y=N_EURUSD, color='N(RVol)')) +
+  scale_color_manual(name=NULL, 
+                     values=c("P(RVol)" = "darkgreen", "N(RVol)"='red')) +
+  #ggtitle("Daily Realized Volatility (RVol) components of EURUSD, 2022 May - 2023 Apr") +
+  xlab("Date") +
+  ylab("Rvol value") +
+  theme_classic() +
+  theme(axis.title = element_text(size= 12.5),
+        axis.text = element_text(size= 11.5),
+        legend.title = element_text(size= 11),
+        legend.text = element_text(size= 11),
+        legend.position = c(0.9, 0.85))
+```
+
+## Autocorrelation plots
+Use the second week data of 2022 May to plot the ACF for EURUSD rate and RV - verify the stylized facts
+Returns are serially uncorrelated
+Volatility is clustered and persistent
+```{r echo=FALSE}
+EU_flat[which((EU_flat$datetime <= "2022-05-13") & (EU_flat$datetime >= "2022-05-9")), ] %>% 
+  ACF(log_return, lag_max = 50) %>%
+  autoplot() +
+  labs(title = "EURUSD log return, 2022 May 9 - 2022 May 13", x = "lag")
+EU_flat[which((EU_flat$datetime < "2022-05-13")&(EU_flat$datetime > "2022-05-9")), ] %>% 
+  ACF(abs(log_return), lag_max = 50) %>%
+  autoplot() +
+  labs(title = "EURUSD absolute return/volatility, 2022 May 9 - 2022 May 13", x="lag")
+
+acf(EU_daily$rvol, lag.max=30)
+```
+## Box-Cox plot
+```{r}
+library(MASS)
+# Plot the Box-Cox normality plot
+boxcox(EU_daily$rvol^2 ~ 1)
+```
+## QQ plots
+```{r}
+qqnorm(EU_daily$rvol^2)
+qqline(EU_daily$rvol^2)
+
+qqnorm(EU_daily$rvol)
+qqline(EU_daily$rvol)
+
+qqnorm(log(EU_daily$rvol^2))
+qqline(log(EU_daily$rvol^2))
+```
+

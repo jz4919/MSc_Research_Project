@@ -1,0 +1,179 @@
+---
+title: "univariate_residual_distr"
+author: "CID: 01714151"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## RV_HAR
+```{r}
+library(ghyp)
+plot(EU_HAR_in_model$residuals)
+
+hist(EU_HAR_in_model$residuals)
+
+RV_HAR_aic.uv <- stepAIC.ghyp(EU_HAR_in_model$residuals)
+
+RV_HAR_aic.uv
+
+RV_HAR_aic.uv$best.model
+```
+## HAR_BV+J
+### BV
+```{r}
+plot(EU_HAR_in_model_bv$residuals)
+
+hist(EU_HAR_in_model_bv$residuals)
+
+aic.uv <- stepAIC.ghyp(EU_HAR_in_model_bv$residuals)
+
+aic.uv
+
+aic.uv$best.model
+```
+### J
+```{r}
+plot(EU_HAR_in_model_jump$residuals)
+
+hist(EU_HAR_in_model_jump$residuals)
+
+aic.uv <- stepAIC.ghyp(EU_HAR_in_model_jump$residuals)
+
+aic.uv
+
+aic.uv$best.model
+```
+
+###BV+J
+```{r}
+plot(EU_inpred_bvJ$true-EU_inpred_bvJ$HAR_pred)
+
+hist(EU_inpred_bvJ$true-EU_inpred_bvJ$HAR_pred)
+
+HAR_BVJ_aic.uv <- stepAIC.ghyp(EU_inpred_bvJ$true-EU_inpred_bvJ$HAR_pred)
+
+HAR_BVJ_aic.uv
+
+HAR_BVJ_aic.uv$best.model
+```
+## HAR_BV+dJ
+### dJ
+```{r}
+plot(EU_dHAR_in_model_jump$residuals)
+
+hist(EU_dHAR_in_model_jump$residuals)
+
+aic.uv <- stepAIC.ghyp(EU_dHAR_in_model_jump$residuals)
+
+aic.uv
+
+aic.uv$best.model
+```
+
+### BV+dJ
+```{r}
+plot(EU_inpred_bvJ$true-EU_inpred_bvJ$dHAR_pred)
+
+hist(EU_inpred_bvJ$true-EU_inpred_bvJ$dHAR_pred)
+
+HAR_BVdJ_aic.uv <- stepAIC.ghyp(EU_inpred_bvJ$true-EU_inpred_bvJ$dHAR_pred)
+
+HAR_BVdJ_aic.uv
+
+HAR_BVdJ_aic.uv$best.model
+```
+## HAR_adj.C+J
+### adj.C
+```{r}
+plot(EU_HAR_in_model_adj.c$residuals)
+
+hist(EU_HAR_in_model_adj.c$residuals)
+
+aic.uv <- stepAIC.ghyp(EU_HAR_in_model_adj.c$residuals)
+
+aic.uv
+
+aic.uv$best.model
+```
+### adj.J
+```{r}
+plot(EU_HAR_in_model_adj.j$residuals)
+
+hist(EU_HAR_in_model_adj.j$residuals)
+
+aic.uv <- stepAIC.ghyp(EU_HAR_in_model_adj.j$residuals)
+
+aic.uv
+
+aic.uv$best.model
+```
+### adj.C+J
+```{r}
+plot(EU_inpred_adj.cj$true - EU_inpred_adj.cj$HAR_pred)
+
+hist(EU_inpred_adj.cj$true - EU_inpred_adj.cj$HAR_pred)
+
+HAR_adjCJ_aic.uv <- stepAIC.ghyp(EU_inpred_adj.cj$true - EU_inpred_adj.cj$HAR_pred)
+
+HAR_adjCJ_aic.uv
+
+HAR_adjCJ_aic.uv$best.model
+```
+
+## HAR_adj.C+dJ
+### adj.dJ
+```{r}
+plot(EU_dHAR_in_model_adj.j$residuals)
+
+hist(EU_dHAR_in_model_adj.j$residuals)
+
+aic.uv <- stepAIC.ghyp(EU_dHAR_in_model_adj.j$residuals)
+
+aic.uv
+
+aic.uv$best.model
+```
+### adj.C+J
+```{r}
+plot(EU_inpred_adj.cj$true - EU_inpred_adj.cj$dHAR_pred)
+
+hist(EU_inpred_adj.cj$true - EU_inpred_adj.cj$dHAR_pred)
+
+HAR_adjCdJ_aic.uv <- stepAIC.ghyp(EU_inpred_adj.cj$true - EU_inpred_adj.cj$dHAR_pred)
+
+HAR_adjCdJ_aic.uv
+
+HAR_adjCdJ_aic.uv$best.model
+```
+
+## HAR_RVJ
+```{r}
+plot(EU_HAR_RVJ_in_model$residuals)
+
+hist(EU_HAR_RVJ_in_model$residuals)
+
+HAR_RVJ_aic.uv <- stepAIC.ghyp(EU_HAR_RVJ_in_model$residuals)
+
+HAR_RVJ_aic.uv
+
+HAR_RVJ_aic.uv$best.model
+```
+
+## SHAR_RVJ
+```{r}
+plot(EU_SHAR_RVJ_in_model$residuals)
+
+hist(EU_SHAR_RVJ_in_model$residuals)
+
+SHAR_RVJ_aic.uv <- stepAIC.ghyp(EU_HAR_RVCJ_in_model$residuals)
+
+SHAR_RVJ_aic.uv
+
+SHAR_RVJ_aic.uv$best.model
+```
