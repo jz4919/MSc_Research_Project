@@ -21,5 +21,4 @@ The outputs and code of the project are structured as follows:
 The results and images presented in the report can be reproduced with the `.Rmd` files in the **univariate_model & analysis/** and **multivariate_model & analysis/** directories. Just run the `.Rmd` files in the numbering order of their file names, and one is able to reproduce all the results.
 
 ### Note
-This project is completed individually by the student of CID 01714151. Should any error be spotted or further enquiries be raised regarding the project, feel free to email the author through jz4919@ic.ac.uk. It is currently a private project shared exclusively within the Statistics Department of Imperial College London. The viewer shall not distribute the repository link without the permission from the author.
-
+This project is completed individually by the student of CID 01714151. Should any error be spotted or further enquiries be raised regarding the project, feel free to email the author through jz4919@ic.ac.uk. 
