@@ -1,0 +1,333 @@
+---
+title: "Univariate model fitting"
+author: "CID: 01714151"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Define function that would contruct the model and forecast for RV_J
+```{r}
+# Define function that computes the one-day forecast of the HAR_RV_J model
+comp_har_cj_pred <- function(train_start=22, train_end, c, j){
+  # Obtain RV_{t+1} as the training y
+  y = c[(train_start+1):(train_end+1)]
+  # Obtain RV_{t}, RV_{t:t-4}, RV_{t:t-22} as the training X
+  x_d = c[train_start:train_end]
+  x_w = unlist(lapply(train_start:train_end, function(index){comp_mean(index, period=5, dat=c)}))
+  x_m = unlist(lapply(train_start:train_end, function(index){comp_mean(index, period=22, dat=c)}))
+  jump = j[train_start:train_end]
+  # Fit the HAR model with the training model
+  har_rv_j = lm(y~x_d + x_w + x_m + jump)
+  # Make prediction on RV_{t+2}
+  pred = predict(har_rv_j, data.frame(x_d=c[train_end+1], x_w=comp_mean(train_end+1, 5, c), x_m=comp_mean(train_end+1, 22, c), jump = j[train_end+1]), interval='confidence', level=0.95)
+  # Return the fitted model and the one-day forecast
+  return(list(pred=pred, model=har_rv_j))
+}
+
+# Define function that computes the one-day forecast of the HAR_RV_J model
+comp_har_rvj_trans_pred <- function(train_start=22, train_end, rv, j, trans_c, trans_j){
+  # Obtain RV_{t+1} as the training y
+  y = trans_c(rv[(train_start+1):(train_end+1)])
+  # Obtain RV_{t}, RV_{t:t-4}, RV_{t:t-22} as the training X
+  x_d = trans_c(rv[train_start:train_end])
+  x_w = trans_c(unlist(lapply(train_start:train_end, function(index){comp_mean(index, period=5, dat=rv)})))
+  x_m = trans_c(unlist(lapply(train_start:train_end, function(index){comp_mean(index, period=22, dat=rv)})))
+  jump = trans_j(j[train_start:train_end])
+  # Fit the HAR model with the training model
+  har_rv_j = lm(y~x_d + x_w + x_m + jump)
+  # Make prediction on RV_{t+2}
+  pred = predict(har_rv_j, data.frame(x_d=trans_c(rv[train_end+1]), 
+                                      x_w=trans_c(comp_mean(train_end+1, 5, rv)), 
+                                      x_m=trans_c(comp_mean(train_end+1, 22, rv)), 
+                                      jump = trans_j(j[train_end+1])), interval='confidence', level=0.95)
+  # Return the fitted model and the one-day forecast
+  return(list(pred=pred, model=har_rv_j))
+}
+
+#Define function that computes the one-day forecast of the SHAR model
+comp_shar_cj_pred <- function(train_start=22, train_end, c_d, c_p, c_n, j){
+  # Obtain RV_{t+1} as the training y
+  y = c_d[(train_start+1):(train_end+1)]
+  # Obtain P(RV_{t}), N(RV_{t}), RV_{t:t-4}, RV_{t:t-22} as the training X
+  x_d_p = c_p[train_start:train_end]
+  x_d_n = c_n[train_start:train_end]
+  x_w = unlist(lapply(train_start:train_end, function(index){comp_mean(index, period=5, dat=c_d)}))
+  x_m = unlist(lapply(train_start:train_end, function(index){comp_mean(index, period=22, dat=c_d)}))
+  jump = j[train_start:train_end]
+  # Fit the HAR model with the training model
+  shar_cj = lm(y~x_d_p + x_d_n + x_w + x_m + jump)
+  # Make prediction on RV_{t+2}
+  pred = predict(shar_cj, data.frame(x_d_p=c_p[train_end+1], x_d_n=c_n[train_end+1] , x_w=comp_mean(train_end+1, 5, c_d), x_m=comp_mean(train_end+1, 22, c_d), jump = j[train_end+1]), interval='confidence', level=0.95)
+  return(list(pred=pred, model=shar_cj))
+}
+```
+
+```{r}
+EU_daily4 <- EU_daily2[,c('date', 'currency', 'rvar', 'P_rvar', 'N_rvar' ,'rbpv', 'jump','J')]
+EU_daily4 <- EU_daily4 %>%
+  mutate(adj.j = (rvar - mu1^(-2)*rbpv)*(J < qnorm(0.01, 0, 1))) %>%
+  mutate(adj.c = rvar*(J >= qnorm(0.01, 0, 1)) + mu1^(-2)*rbpv*(J < qnorm(0.01, 0, 1)))
+```
+
+## HAR
+### HAR_RVJ
+```{r}
+# Estimate the model on full data sample
+EU_HAR_RVJ_in_model <- comp_har_cj_pred(22, 256, log(EU_daily4$rvar), log(EU_daily4$jump+1e-6))$model
+EU_HAR_RVJ_in_model$coefficients
+EU_HAR_RVJ_inpred <- data.frame(date=EU_daily$date[23:257], pred=predict(EU_HAR_RVJ_in_model), true=log(EU_daily$rvol[23:257]^2))
+mean((EU_HAR_RVJ_inpred$pred-EU_HAR_RVJ_inpred$true)^2)
+base::summary(EU_HAR_RVJ_in_model)$adj.r.squared
+# Plot the HAR in-sample forecast
+EU_HAR_RVJ_inpred_plot <- ggplot(data=EU_HAR_RVJ_inpred, aes(x=date)) +
+  geom_line(aes(y=true, color='True RVol')) +
+  geom_line(aes(y=pred, color='HAR RV pred')) +
+  scale_color_manual(name=NULL, values=c('True RVol' = 'darkgrey', "HAR RV pred" = "steelblue")) +
+  #ggtitle("HAR in-sample Forecast on EURUSD from 2022 May - 2023 Apr") +
+  ylab("RVol") +
+  xlab("Date") +
+  theme_classic() +
+  theme(axis.title = element_text(size= 12.5),
+        axis.text = element_text(size= 11.5),
+        legend.title = element_text(size= 11),
+        legend.text = element_text(size= 11),
+        legend.position = c(0.9, 0.85))
+
+EU_HAR_RVJ_inpred_plot
+```
+```{r eval=FALSE, include=FALSE}
+# Estimate the model on full data sample
+EU_HAR_RVJ_in_model <- comp_har_rvj_trans_pred(22, 256, EU_daily2$rvar, EU_daily2$jump, log, function(x){log(x+1e-6)})$model
+EU_HAR_RVJ_in_model$coefficients
+base::summary(EU_HAR_RVJ_in_model)$adj.r.squared
+EU_HAR_RVJ_inpred <- data.frame(date=EU_daily$date[23:257], pred=predict(EU_HAR_RVJ_in_model), true=log(EU_daily2$rvar[23:257]))
+mean((EU_HAR_RVJ_inpred$pred-EU_HAR_RVJ_inpred$true)^2)
+# Plot the HAR in-sample forecast
+EU_HAR_RVJ_inpred_plot <- ggplot(data=EU_HAR_RVJ_inpred, aes(x=date)) +
+  geom_line(aes(y=true, color='True RVol')) +
+  geom_line(aes(y=pred, color='HAR RV pred')) +
+  scale_color_manual(name=NULL, values=c('True RVol' = 'darkgrey', "HAR RV pred" = "steelblue")) +
+  #ggtitle("HAR in-sample Forecast on EURUSD from 2022 May - 2023 Apr") +
+  ylab("RVol") +
+  xlab("Date") +
+  theme_classic() +
+  theme(axis.title = element_text(size= 12.5),
+        axis.text = element_text(size= 11.5),
+        legend.title = element_text(size= 11),
+        legend.text = element_text(size= 11),
+        legend.position = c(0.9, 0.85))
+
+EU_HAR_RVJ_inpred_plot
+```
+
+```{r}
+# Obtain the one-day out-of-sample forecast and 0.95 CI of the rolling window
+EU_HAR_RVJ_outpred <- data.frame(do.call(rbind, lapply(EU_roll_start:EU_roll_end, function(x){comp_har_cj_pred(x-train_length, x, log(EU_daily4$rvar), log(EU_daily4$jump+1e-6))$pred})), row.names = NULL)
+EU_HAR_RVJ_outpred$date = EU_daily$date[(EU_roll_start+2) : (EU_roll_end+2)]
+EU_HAR_RVJ_outpred$true = log(EU_daily$rvol[(EU_roll_start+2) : (EU_roll_end+2)]^2)
+
+# Plot the HAR out-of-sample forecast
+EU_daily_23 <- EU_daily[year(EU_daily$date)==2023,]
+EU_HAR_RVJ_outpred_plot <- ggplot() +
+  geom_line(data=data.frame(x=EU_daily_23$date, y=log(EU_daily_23$rvol^2)), aes(x = x, y = y, color = "True RVol")) +
+  geom_line(data=data.frame(x=EU_HAR_RVJ_outpred$date, y=EU_HAR_RVJ_outpred$fit), aes(x = x, y = y, color = "HAR pred")) +
+  geom_ribbon(data=data.frame(x=EU_HAR_RVJ_outpred$date, lwr=EU_HAR_RVJ_outpred$lwr, upr = EU_HAR_RVJ_outpred$upr), aes(x = x, ymin = lwr, ymax=upr), fill = "lightblue", alpha=0.3) +
+  scale_color_manual(name=NULL, values=c('True RVol' = 'darkgrey', "HAR pred" = "darkblue")) +
+  theme_classic() +
+  ggtitle("HAR Out-of-sample Forecast (with 95% CI) on EURUSD from 2023 Mar - Apr") +
+  xlab("date") + ylab("RVol")
+
+EU_HAR_RVJ_outpred_plot
+```
+### HAR_RVCJ
+```{r}
+# Estimate the model on full data sample
+EU_HAR_RVCJ_in_model <- comp_har_cj_pred(22, 256, log(EU_daily4$adj.c), log(EU_daily4$adj.j+1e-6))$model
+EU_HAR_RVCJ_in_model$coefficients
+EU_HAR_RVCJ_inpred <- data.frame(date=EU_daily$date[23:257], pred=predict(EU_HAR_RVCJ_in_model), true=log(EU_daily$rvol[23:257]^2))
+mean((EU_HAR_RVCJ_inpred$pred - EU_HAR_RVCJ_inpred$true)^2)
+base::summary(EU_HAR_RVCJ_in_model)$adj.r.squared
+# Plot the HAR in-sample forecast
+EU_HAR_RVCJ_inpred_plot <- ggplot(data=EU_HAR_RVCJ_inpred, aes(x=date)) +
+  geom_line(aes(y=true, color='True RVol')) +
+  geom_line(aes(y=pred, color='HAR RV pred')) +
+  scale_color_manual(name=NULL, values=c('True RVol' = 'darkgrey', "HAR RV pred" = "steelblue")) +
+  #ggtitle("HAR in-sample Forecast on EURUSD from 2022 May - 2023 Apr") +
+  ylab("RVol") +
+  xlab("Date") +
+  theme_classic() +
+  theme(axis.title = element_text(size= 12.5),
+        axis.text = element_text(size= 11.5),
+        legend.title = element_text(size= 11),
+        legend.text = element_text(size= 11),
+        legend.position = c(0.9, 0.85))
+
+EU_HAR_RVCJ_inpred_plot
+```
+```{r}
+dm.test(EU_HAR_inpred$pred - EU_HAR_inpred$true, EU_HAR_RVJ_inpred$pred - EU_HAR_RVJ_inpred$true, alternative='greater', power=2)
+```
+
+```{r}
+# Obtain the one-day out-of-sample forecast and 0.95 CI of the rolling window
+EU_HAR_RVCJ_outpred <- data.frame(do.call(rbind, lapply(EU_roll_start:EU_roll_end, function(x){comp_har_cj_pred(x-train_length, x, log(EU_daily4$adj.c), log(EU_daily4$adj.j+1e-6))$pred})), row.names = NULL)
+EU_HAR_RVCJ_outpred$date = EU_daily$date[(EU_roll_start+2) : (EU_roll_end+2)]
+EU_HAR_RVCJ_outpred$true = log(EU_daily$rvol[(EU_roll_start+2) : (EU_roll_end+2)]^2)
+
+# Plot the HAR out-of-sample forecast
+EU_daily_23 <- EU_daily[year(EU_daily$date)==2023,]
+EU_HAR_RVCJ_outpred_plot <- ggplot() +
+  geom_line(data=data.frame(x=EU_daily_23$date, y=log(EU_daily_23$rvol^2)), aes(x = x, y = y, color = "True RVol")) +
+  geom_line(data=data.frame(x=EU_HAR_RVCJ_outpred$date, y=EU_HAR_RVCJ_outpred$fit), aes(x = x, y = y, color = "HAR pred")) +
+  geom_ribbon(data=data.frame(x=EU_HAR_RVCJ_outpred$date, lwr=EU_HAR_RVCJ_outpred$lwr, upr = EU_HAR_RVCJ_outpred$upr), aes(x = x, ymin = lwr, ymax=upr), fill = "lightblue", alpha=0.3) +
+  scale_color_manual(name=NULL, values=c('True RVol' = 'darkgrey', "HAR pred" = "darkblue")) +
+  theme_classic() +
+  ggtitle("HAR Out-of-sample Forecast (with 95% CI) on EURUSD from 2023 Mar - Apr") +
+  xlab("date") + ylab("RVol")
+
+EU_HAR_RVCJ_outpred_plot
+```
+
+### HAR_BVJ
+```{r}
+# Estimate the model on full data sample
+EU_HAR_BVJ_in_model <- comp_har_cj_pred(22, 256, log(EU_daily4$rbpv*mu1^(-2)), log(EU_daily2$jump+1e-6))$model
+EU_HAR_BVJ_in_model$coefficients
+EU_HAR_BVJ_inpred <- data.frame(date=EU_daily$date[23:257], pred=predict(EU_HAR_BVJ_in_model), true=log(EU_daily$rvol[23:257]^2))
+mean((EU_HAR_BVJ_inpred$pred-EU_HAR_BVJ_inpred$true)^2)
+base::summary(EU_HAR_BVJ_in_model)$adj.r.squared
+# Plot the HAR in-sample forecast
+EU_HAR_BVJ_inpred_plot <- ggplot(data=EU_HAR_BVJ_inpred, aes(x=date)) +
+  geom_line(aes(y=true, color='True RVol')) +
+  geom_line(aes(y=pred, color='HAR RV pred')) +
+  scale_color_manual(name=NULL, values=c('True RVol' = 'darkgrey', "HAR RV pred" = "steelblue")) +
+  #ggtitle("HAR in-sample Forecast on EURUSD from 2022 May - 2023 Apr") +
+  ylab("RVol") +
+  xlab("Date") +
+  theme_classic() +
+  theme(axis.title = element_text(size= 12.5),
+        axis.text = element_text(size= 11.5),
+        legend.title = element_text(size= 11),
+        legend.text = element_text(size= 11),
+        legend.position = c(0.9, 0.85))
+
+EU_HAR_BVJ_inpred_plot
+```
+```{r}
+# Obtain the one-day out-of-sample forecast and 0.95 CI of the rolling window
+EU_HAR_BVJ_outpred <- data.frame(do.call(rbind, lapply(EU_roll_start:EU_roll_end, function(x){comp_har_cj_pred(x-train_length, x, log(EU_daily4$rbpv*mu1^(-2)), log(EU_daily4$jump+1e-6))$pred})), row.names = NULL)
+EU_HAR_BVJ_outpred$date = EU_daily$date[(EU_roll_start+2) : (EU_roll_end+2)]
+EU_HAR_BVJ_outpred$true = log(EU_daily$rvol[(EU_roll_start+2) : (EU_roll_end+2)]^2)
+
+# Plot the HAR out-of-sample forecast
+EU_daily_23 <- EU_daily[year(EU_daily$date)==2023,]
+EU_HAR_BVJ_outpred_plot <- ggplot() +
+  geom_line(data=data.frame(x=EU_daily_23$date, y=log(EU_daily_23$rvol^2)), aes(x = x, y = y, color = "True RVol")) +
+  geom_line(data=data.frame(x=EU_HAR_BVJ_outpred$date, y=EU_HAR_BVJ_outpred$fit), aes(x = x, y = y, color = "HAR pred")) +
+  geom_ribbon(data=data.frame(x=EU_HAR_BVJ_outpred$date, lwr=EU_HAR_BVJ_outpred$lwr, upr = EU_HAR_BVJ_outpred$upr), aes(x = x, ymin = lwr, ymax=upr), fill = "lightblue", alpha=0.3) +
+  scale_color_manual(name=NULL, values=c('True RVol' = 'darkgrey', "HAR pred" = "darkblue")) +
+  theme_classic() +
+  ggtitle("HAR Out-of-sample Forecast (with 95% CI) on EURUSD from 2023 Mar - Apr") +
+  xlab("date") + ylab("RVol")
+
+EU_HAR_BVJ_outpred_plot
+```
+### HAR_RVcd
+```{r}
+# Estimate the model on full data sample
+EU_HAR_RVcd_in_model <- comp_har_cj_pred(22, 256, log(EU_daily3$rvol_c^2), log(EU_daily3$rvol_d^2+1e-6))$model
+EU_HAR_RVcd_in_model$coefficients
+EU_HAR_RVcd_inpred <- data.frame(date=EU_daily$date[23:257], pred=predict(EU_HAR_RVcd_in_model), true=log(EU_daily$rvol[23:257]^2))
+mean((EU_HAR_RVcd_inpred$pred-EU_HAR_RVcd_inpred$true)^2)
+base::summary(EU_HAR_RVcd_in_model)$adj.r.squared
+# Plot the HAR in-sample forecast
+EU_HAR_RVcd_inpred_plot <- ggplot(data=EU_HAR_RVcd_inpred, aes(x=date)) +
+  geom_line(aes(y=true, color='True RVol')) +
+  geom_line(aes(y=pred, color='HAR RV pred')) +
+  scale_color_manual(name=NULL, values=c('True RVol' = 'darkgrey', "HAR RV pred" = "steelblue")) +
+  #ggtitle("HAR in-sample Forecast on EURUSD from 2022 May - 2023 Apr") +
+  ylab("RVol") +
+  xlab("Date") +
+  theme_classic() +
+  theme(axis.title = element_text(size= 12.5),
+        axis.text = element_text(size= 11.5),
+        legend.title = element_text(size= 11),
+        legend.text = element_text(size= 11),
+        legend.position = c(0.9, 0.85))
+
+EU_HAR_RVcd_inpred_plot
+```
+```{r}
+# Obtain the one-day out-of-sample forecast and 0.95 CI of the rolling window
+EU_HAR_RVcd_outpred <- data.frame(do.call(rbind, lapply(EU_roll_start:EU_roll_end, function(x){comp_har_cj_pred(x-train_length, x, log(EU_daily3$rvol_c^2), log(EU_daily3$rvol_d^2+1e-6))$pred})), row.names = NULL)
+EU_HAR_RVcd_outpred$date = EU_daily$date[(EU_roll_start+2) : (EU_roll_end+2)]
+EU_HAR_RVcd_outpred$true = log(EU_daily$rvol[(EU_roll_start+2) : (EU_roll_end+2)]^2)
+
+# Plot the HAR out-of-sample forecast
+EU_daily_23 <- EU_daily[year(EU_daily$date)==2023,]
+EU_HAR_RVcd_outpred_plot <- ggplot() +
+  geom_line(data=data.frame(x=EU_daily_23$date, y=log(EU_daily_23$rvol^2)), aes(x = x, y = y, color = "True RVol")) +
+  geom_line(data=data.frame(x=EU_HAR_RVcd_outpred$date, y=EU_HAR_RVcd_outpred$fit), aes(x = x, y = y, color = "HAR pred")) +
+  geom_ribbon(data=data.frame(x=EU_HAR_RVcd_outpred$date, lwr=EU_HAR_RVcd_outpred$lwr, upr = EU_HAR_RVcd_outpred$upr), aes(x = x, ymin = lwr, ymax=upr), fill = "lightblue", alpha=0.3) +
+  scale_color_manual(name=NULL, values=c('True RVol' = 'darkgrey', "HAR pred" = "darkblue")) +
+  theme_classic() +
+  ggtitle("HAR Out-of-sample Forecast (with 95% CI) on EURUSD from 2023 Mar - Apr") +
+  xlab("date") + ylab("RVol")
+
+EU_HAR_RVcd_outpred_plot
+```
+
+## SHAR
+### SHAR_RVJ
+```{r}
+# Estimate the model on full data sample
+EU_SHAR_RVJ_in_model <- comp_shar_cj_pred(22, 256, log(EU_daily4$rvar), log(EU_daily4$P_rvar), log(EU_daily4$N_rvar), log(EU_daily4$jump+1e-6))$model
+EU_SHAR_RVJ_in_model$coefficients
+EU_SHAR_RVJ_inpred <- data.frame(date=EU_daily$date[23:257], pred=predict(EU_SHAR_RVJ_in_model), true=log(EU_daily$rvol[23:257]^2))
+mean((EU_SHAR_RVJ_inpred$pred-EU_SHAR_RVJ_inpred$true)^2)
+base::summary(EU_SHAR_RVJ_in_model)$adj.r.squared
+# Plot the HAR in-sample forecast
+EU_SHAR_RVJ_inpred_plot <- ggplot(data=EU_SHAR_RVJ_inpred, aes(x=date)) +
+  geom_line(aes(y=true, color='True RVol')) +
+  geom_line(aes(y=pred, color='HAR RV pred')) +
+  scale_color_manual(name=NULL, values=c('True RVol' = 'darkgrey', "HAR RV pred" = "steelblue")) +
+  #ggtitle("HAR in-sample Forecast on EURUSD from 2022 May - 2023 Apr") +
+  ylab("RVol") +
+  xlab("Date") +
+  theme_classic() +
+  theme(axis.title = element_text(size= 12.5),
+        axis.text = element_text(size= 11.5),
+        legend.title = element_text(size= 11),
+        legend.text = element_text(size= 11),
+        legend.position = c(0.9, 0.85))
+
+EU_SHAR_RVJ_inpred_plot
+```
+```{r}
+# Obtain the one-day out-of-sample forecast and 0.95 CI of the rolling window
+EU_SHAR_RVJ_outpred <- data.frame(do.call(rbind, lapply(EU_roll_start:EU_roll_end, function(x){comp_shar_cj_pred(x-train_length, x, log(EU_daily4$rvar), log(EU_daily4$P_rvar), log(EU_daily4$N_rvar), log(EU_daily4$jump+1e-6))$pred})), row.names = NULL)
+EU_SHAR_RVJ_outpred$date = EU_daily$date[(EU_roll_start+2) : (EU_roll_end+2)]
+EU_SHAR_RVJ_outpred$true = log(EU_daily$rvol[(EU_roll_start+2) : (EU_roll_end+2)]^2)
+
+# Plot the HAR out-of-sample forecast
+EU_daily_23 <- EU_daily[year(EU_daily$date)==2023,]
+EU_SHAR_RVJ_outpred_plot <- ggplot() +
+  geom_line(data=data.frame(x=EU_daily_23$date, y=log(EU_daily_23$rvol^2)), aes(x = x, y = y, color = "True RVol")) +
+  geom_line(data=data.frame(x=EU_SHAR_RVJ_outpred$date, y=EU_SHAR_RVJ_outpred$fit), aes(x = x, y = y, color = "HAR pred")) +
+  geom_ribbon(data=data.frame(x=EU_SHAR_RVJ_outpred$date, lwr=EU_SHAR_RVJ_outpred$lwr, upr = EU_SHAR_RVJ_outpred$upr), aes(x = x, ymin = lwr, ymax=upr), fill = "lightblue", alpha=0.3) +
+  scale_color_manual(name=NULL, values=c('True RVol' = 'darkgrey', "HAR pred" = "darkblue")) +
+  theme_classic() +
+  ggtitle("HAR Out-of-sample Forecast (with 95% CI) on EURUSD from 2023 Mar - Apr") +
+  xlab("date") + ylab("RVol")
+
+EU_SHAR_RVJ_outpred_plot
+```
+
+
+

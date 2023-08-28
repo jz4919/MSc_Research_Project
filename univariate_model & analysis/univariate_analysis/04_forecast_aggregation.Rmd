@@ -1,0 +1,266 @@
+---
+title: "univariate_aggregating_forecast"
+author: "CID: 01714151"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Create experts for in-sample and out-of-sample forecast
+
+```{r}
+#expert_names <- c('HAR_RV', 'SHAR_RV', 'HAR_BV+J', 'HAR_BV+dJ', 'HAR adj.C+J', 'HAR adj.C+dJ','HAR_RVc+RVd', 'HAR_RVc+dRVd', 'SHAR_RVc+RVd','SHAR_RVc+dRVd', 'HAR_RVJ', 'HAR_RVCJ', 'SHAR_RVJ')
+#expert_in <- cbind(EU_HAR_inpred$pred, EU_SHAR_inpred$pred, EU_inpred_bvJ$HAR_pred, EU_inpred_bvJ$dHAR_pred, EU_inpred_adj.cj$HAR_pred, EU_inpred_adj.cj$dHAR_pred, EU_HAR_inpred_cd$HAR_pred, EU_HAR_inpred_cd$dHAR_pred, EU_SHAR_inpred_cd$SHAR_pred, EU_SHAR_inpred_cd$dSHAR_pred, EU_HAR_RVJ_inpred$pred ,EU_HAR_RVCJ_inpred$pred, EU_SHAR_RVJ_inpred$pred)
+#expert_out <- cbind(EU_HAR_outpred$fit, EU_SHAR_outpred$fit, EU_outpred_bvJ$HAR_pred, EU_outpred_bvJ$dHAR_pred, EU_outpred_adj.cj$HAR_pred, EU_outpred_adj.cj$dHAR_pred, EU_HAR_outpred_cd$HAR_pred, EU_HAR_outpred_cd$dHAR_pred, EU_SHAR_outpred_cd$SHAR_pred, EU_SHAR_outpred_cd$dSHAR_pred, EU_HAR_RVCJ_outpred$fit, EU_SHAR_RVJ_outpred$fit)
+
+library(opera)
+expert_names <- c('HAR_RV', 'HAR adj.C+J', 'HAR adj.C+dJ', 'SHAR_RV', 'HAR_RVc+dRVd', 'HAR_BV+J', 'HAR_BV+dJ')
+expert_in <- cbind(EU_HAR_inpred$pred, EU_inpred_adj.cj$HAR_pred, EU_inpred_adj.cj$dHAR_pred, EU_SHAR_inpred$pred, EU_HAR_inpred_cd$dHAR_pred, EU_inpred_bvJ$HAR_pred, EU_inpred_bvJ$dHAR_pred)
+colnames(expert_in) <- expert_names
+true_in <- EU_HAR_inpred$true
+#matplot(cbind(Y, X), type = 'l', col = 1:6, ylab = 'Weekly load', xlab = 'Week')
+
+expert_out <- cbind(EU_HAR_outpred$fit, EU_outpred_adj.cj$HAR_pred, EU_outpred_adj.cj$dHAR_pred, EU_SHAR_outpred$fit, EU_HAR_outpred_cd$dHAR_pred, EU_outpred_bvJ$HAR_pred, EU_outpred_bvJ$dHAR_pred)
+true_out <- EU_outpred_bvJ$true
+
+agg_names <- c('expert', 'convex', 'linear', "BOA", "MLpol", "EWA", "FS", "Ridge", "OGD", "FTRL")
+agg_model_summary <- matrix(nrow=length(agg_names), ncol=4,
+                            dimnames=list(agg_names, c('in-samp MSE', 'out-samp MSE', 'in-samp p', 'out-samp p')))
+```
+
+## Oracle
+
+### Best expers
+
+```{r}
+library(forecast)
+# in-sample model & forecast
+ora.expert <- oracle(Y = true_in, experts = expert_in, loss.type = 'square', model = 'expert')
+ora.expert$loss
+
+plot(ora.expert)
+
+ora.expert
+
+# out-of-sample forecast
+ora.expert.out <- predict(ora.expert, newexpert = expert_out)
+mean((ora.expert.out - true_out)^2)
+
+agg_model_summary[1,] = c(ora.expert$loss, mean((ora.expert.out - true_out)^2), 
+                          tryCatch(dm.test(RVol_inpred_err_list[[1]], ora.expert$residuals,
+                                           alternative='greater', power=2)$p.value, error = function(x) NA), 
+                          tryCatch(dm.test(RVol_outpred_err_list[[1]], ora.expert.out - true_out,
+                                            alternative='greater', power=2)$p.value, error = function(x) NA))
+```
+
+### Best convex combination
+
+```{r}
+# in-sample model & forecast
+ora.convex <- oracle(Y = true_in, experts = expert_in, loss.type = 'square', model = 'convex')
+ora.convex$loss
+
+plot(ora.convex)
+
+ora.convex
+
+# out-of-sample forecast
+ora.convex.out <- predict(ora.convex, newexpert = expert_out)
+mean((ora.convex.out - true_out)^2)
+
+agg_model_summary[2,] = c(ora.convex$loss, mean((ora.convex.out - true_out)^2), 
+                          tryCatch(dm.test(RVol_inpred_err_list[[1]], ora.convex$residuals,
+                                           alternative='greater', power=2)$p.value, error = function(x) NA), 
+                          tryCatch(dm.test(RVol_outpred_err_list[[1]], ora.convex.out - true_out,
+                                            alternative='greater', power=2)$p.value, error = function(x) NA))
+```
+
+### Best linear combination
+
+```{r}
+# in-sample model & forecast
+ora.linear <- oracle(Y = true_in, experts = expert_in, loss.type = 'square', model = 'linear', lambda=0.001)
+ora.linear$loss
+
+plot(ora.linear)
+
+ora.linear
+
+# out-of-sample forecast
+ora.linear.out <- predict(ora.linear, newexpert = expert_out)
+mean((ora.linear.out - true_out)^2)
+
+agg_model_summary[3,] = c(ora.linear$loss, mean((ora.linear.out - true_out)^2), 
+                          tryCatch(dm.test(RVol_inpred_err_list[[1]], ora.linear$residuals,
+                                           alternative='greater', power=2)$p.value, error = function(x) NA), 
+                          tryCatch(dm.test(RVol_outpred_err_list[[1]], ora.linear.out - true_out,
+                                            alternative='greater', power=2)$p.value, error = function(x) NA))
+```
+
+## Mixture/ online aggregation of experts
+
+### BOA
+
+```{r}
+# in-sample model and forecast
+m.BOA <- mixture(Y = true_in, experts = expert_in, model = 'BOA', loss.type = 'square', quiet = TRUE)
+m.BOA$loss
+base::summary(m.BOA)
+
+plot(m.BOA, pause = TRUE, type='plot_weight')
+plot(m.BOA, pause = TRUE, type='boxplot_weight')
+plot(m.BOA, pause = TRUE, type='avg_loss')
+
+# out-of-sample forecast
+m.BOA.out <- predict(m.BOA, newexpert = expert_out, newY=true_out, online=TRUE, type='all')
+mean((m.BOA.out$response - true_out)^2)
+
+agg_model_summary[4,] = c(m.BOA$loss, mean((m.BOA.out$response - true_out)^2),
+                          tryCatch(dm.test(RVol_inpred_err_list[[1]], m.BOA$prediction - true_in,
+                                           alternative='greater', power=2)$p.value, error = function(x) NA), 
+                          tryCatch(dm.test(RVol_outpred_err_list[[1]], m.BOA.out$response - true_out,
+                                            alternative='greater', power=2)$p.value, error = function(x) NA))
+```
+
+### ML-poly
+
+```{r}
+# in-sample model and forecast
+m.MLpoly <- mixture(Y = true_in, experts = expert_in, model = 'MLpol', loss.type = 'square', quiet = TRUE)
+m.MLpoly$loss
+base::summary(m.MLpoly)
+
+plot(m.MLpoly, pause = TRUE, type='plot_weight')
+plot(m.MLpoly, pause = TRUE, type='boxplot_weight')
+plot(m.MLpoly, pause = TRUE, type='avg_loss')
+
+# out-of-sample forecast
+m.MLpoly.out <- predict(m.MLpoly, newexpert = expert_out, newY=true_out, online=TRUE, type='all')
+mean((m.MLpoly.out$response - true_out)^2)
+
+agg_model_summary[5,] = c(m.MLpoly$loss, mean((m.MLpoly.out$response - true_out)^2),
+                          tryCatch(dm.test(RVol_inpred_err_list[[1]], m.MLpoly$prediction - true_in,
+                                           alternative='greater', power=2)$p.value, error = function(x) NA), 
+                          tryCatch(dm.test(RVol_outpred_err_list[[1]], m.MLpoly.out$response - true_out,
+                                            alternative='greater', power=2)$p.value, error = function(x) NA))
+```
+
+### EWA
+
+```{r}
+# in-sample model and forecast
+m.EWA <- mixture(Y = true_in, experts = expert_in, model = 'EWA', loss.type = 'square', quiet = TRUE)
+m.EWA$loss
+base::summary(m.EWA)
+
+plot(m.EWA, pause = TRUE, type='plot_weight')
+plot(m.EWA, pause = TRUE, type='boxplot_weight')
+plot(m.EWA, pause = TRUE, type='avg_loss')
+
+# out-of-sample forecast
+m.EWA.out <- predict(m.EWA, newexpert = expert_out, newY=true_out, online=TRUE, type='all')
+mean((m.EWA.out$response - true_out)^2)
+
+agg_model_summary[6,] = c(m.EWA$loss, mean((m.EWA.out$response - true_out)^2),
+                          tryCatch(dm.test(RVol_inpred_err_list[[1]], m.EWA$prediction - true_in,
+                                           alternative='greater', power=2)$p.value, error = function(x) NA), 
+                          tryCatch(dm.test(RVol_outpred_err_list[[1]], m.EWA.out$response - true_out,
+                                            alternative='greater', power=2)$p.value, error = function(x) NA))
+```
+
+### FS
+
+```{r}
+# in-sample model and forecast
+m.FS <- mixture(Y = true_in, experts = expert_in, model = 'FS', loss.type = 'square', quiet = TRUE)
+m.FS$loss
+base::summary(m.FS)
+
+plot(m.FS, pause = TRUE, type='plot_weight')
+plot(m.FS, pause = TRUE, type='boxplot_weight')
+plot(m.FS, pause = TRUE, type='avg_loss')
+
+# out-of-sample forecast
+m.FS.out <- predict(m.FS, newexpert = expert_out, newY=true_out, online=TRUE, type='all')
+mean((m.FS.out$response - true_out)^2)
+
+agg_model_summary[7,] = c(m.FS$loss, mean((m.FS.out$response - true_out)^2),
+                          tryCatch(dm.test(RVol_inpred_err_list[[1]], m.FS$prediction - true_in,
+                                           alternative='greater', power=2)$p.value, error = function(x) NA), 
+                          tryCatch(dm.test(RVol_outpred_err_list[[1]], m.FS.out$response - true_out,
+                                            alternative='greater', power=2)$p.value, error = function(x) NA))
+```
+
+### Ridge
+
+```{r}
+# in-sample model and forecast
+m.Ridge <- mixture(Y = true_in, experts = expert_in, model = 'Ridge', loss.type = 'square', quiet = TRUE)
+m.Ridge$loss
+base::summary(m.Ridge)
+
+plot(m.Ridge, pause = TRUE, type='plot_weight')
+plot(m.Ridge, pause = TRUE, type='boxplot_weight')
+plot(m.Ridge, pause = TRUE, type='avg_loss')
+
+# out-of-sample forecast
+m.Ridge.out <- predict(m.Ridge, newexpert = expert_out, newY=true_out, online=TRUE, type='all')
+mean((m.Ridge.out$response - true_out)^2)
+
+agg_model_summary[8,] = c(m.Ridge$loss, mean((m.Ridge.out$response - true_out)^2),
+                          tryCatch(dm.test(RVol_inpred_err_list[[1]], m.Ridge$prediction - true_in,
+                                           alternative='greater', power=2)$p.value, error = function(x) NA), 
+                          tryCatch(dm.test(RVol_outpred_err_list[[1]], m.Ridge.out$response - true_out,
+                                            alternative='greater', power=2)$p.value, error = function(x) NA))
+```
+
+### OGD
+
+```{r}
+# in-sample model and forecast
+m.OGD <- mixture(Y = true_in, experts = expert_in, model = 'OGD', loss.type = 'square', quiet = TRUE)
+m.OGD$loss
+base::summary(m.OGD)
+
+plot(m.OGD, pause = TRUE, type='plot_weight')
+plot(m.OGD, pause = TRUE, type='boxplot_weight')
+plot(m.OGD, pause = TRUE, type='avg_loss')
+
+# out-of-sample forecast
+m.OGD.out <- predict(m.OGD, newexpert = expert_out, newY=true_out, online=TRUE, type='all')
+mean((m.OGD.out$response - true_out)^2)
+
+agg_model_summary[9,] = c(m.OGD$loss, mean((m.OGD.out$response - true_out)^2),
+                          tryCatch(dm.test(RVol_inpred_err_list[[1]], m.OGD$prediction - true_in,
+                                           alternative='greater', power=2)$p.value, error = function(x) NA), 
+                          tryCatch(dm.test(RVol_outpred_err_list[[1]], m.OGD.out$response - true_out,
+                                            alternative='greater', power=2)$p.value, error = function(x) NA))
+```
+
+### FTRL
+
+```{r}
+# in-sample model and forecast
+m.FTRL <- mixture(Y = true_in, experts = expert_in, model = 'FTRL', loss.type = 'square', quiet = TRUE)
+m.FTRL$loss
+base::summary(m.FTRL)
+
+plot(m.FTRL, pause = TRUE, type='plot_weight')
+plot(m.FTRL, pause = TRUE, type='boxplot_weight')
+plot(m.FTRL, pause = TRUE, type='avg_loss')
+
+# out-of-sample forecast
+m.FTRL.out <- predict(m.FTRL, newexpert = expert_out, newY=true_out, online=TRUE, type='all')
+mean((m.FTRL.out$response - true_out)^2)
+
+agg_model_summary[10,] = c(m.FTRL$loss, mean((m.FTRL.out$response - true_out)^2),
+                          tryCatch(dm.test(RVol_inpred_err_list[[1]], m.FTRL$prediction - true_in,
+                                           alternative='greater', power=2)$p.value, error = function(x) NA), 
+                          tryCatch(dm.test(RVol_outpred_err_list[[1]], m.FTRL.out$response - true_out,
+                                            alternative='greater', power=2)$p.value, error = function(x) NA))
+```

@@ -1,0 +1,108 @@
+---
+title: "Model comparison"
+author: "CID: 01714151"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Create error list for all models
+```{r}
+library(forecast)
+RVol_inpred_err_list = list(HAR_RV = EU_HAR_inpred$pred - EU_HAR_inpred$true,
+                            SHAR_RV = EU_SHAR_inpred$pred - EU_SHAR_inpred$true,
+                            HAR_BVJ = EU_inpred_bvJ$HAR_pred - EU_inpred_bvJ$true,
+                            dHAR_BVJ = EU_inpred_bvJ$dHAR_pred - EU_inpred_bvJ$true,
+                            naive_BVJ = EU_inpred_bvJ$naive_pred - EU_inpred_bvJ$true,
+                            HAR_adj.CJ = EU_inpred_adj.cj$HAR_pred - EU_inpred_adj.cj$true,
+                            dHAR_adj.CJ = EU_inpred_adj.cj$dHAR_pred - EU_inpred_adj.cj$true,
+                            naive_adj.CJ = EU_inpred_adj.cj$naive_pred - EU_inpred_adj.cj$true,
+                            HAR_RVcd = EU_HAR_inpred_cd$HAR_pred - EU_HAR_inpred_cd$true,
+                            dHAR_RVcd = EU_HAR_inpred_cd$dHAR_pred - EU_HAR_inpred_cd$true,
+                            naive_RVcd = EU_HAR_inpred_cd$naive_pred - EU_HAR_inpred_cd$true,
+                            SHAR_RVcd = EU_SHAR_inpred_cd$SHAR_pred - EU_SHAR_inpred_cd$true,
+                            dSHAR_RVcd = EU_SHAR_inpred_cd$dSHAR_pred - EU_SHAR_inpred_cd$true,
+                            naive_sRVcd = EU_SHAR_inpred_cd$naive_pred - EU_SHAR_inpred_cd$true,
+                            HAR_RVJ = EU_HAR_RVJ_inpred$pred - EU_HAR_RVJ_inpred$true,
+                            HAR_BVJ = EU_HAR_BVJ_inpred$pred - EU_HAR_BVJ_inpred$true,
+                            HAR_RVCJ = EU_HAR_RVCJ_inpred$pred - EU_HAR_RVCJ_inpred$true,
+                            HAR_RVcd = EU_HAR_RVcd_inpred$pred - EU_HAR_RVcd_inpred$true,
+                            SHAR_RVJ = EU_SHAR_RVJ_inpred$pred - EU_SHAR_RVJ_inpred$true)
+
+sigma_inpred_err_list = list(HAR_BV = EU_HAR_inpred_bv$pred - EU_HAR_inpred_bv$true,
+                             HAR_adjC = EU_HAR_inpred_adj.c$pred - EU_HAR_inpred_adj.c$true,
+                             HAR_RVc = EU_HAR_inpred_c$pred - EU_HAR_inpred_c$true,
+                             SHAR_RVc = EU_SHAR_inpred_c$pred - EU_SHAR_inpred_c$true)
+
+RVol_outpred_err_list = list(HAR_RV = EU_HAR_outpred$fit - EU_HAR_outpred$true,
+                             SHAR_RV = EU_SHAR_outpred$fit - EU_SHAR_outpred$true,
+                             HAR_BVJ = EU_outpred_bvJ$HAR_pred - EU_outpred_bvJ$true,
+                             dHAR_BVJ = EU_outpred_bvJ$dHAR_pred - EU_outpred_bvJ$true,
+                             naive_BVJ = EU_outpred_bvJ$naive_pred - EU_outpred_bvJ$true,
+                             HAR_adj.CJ = EU_outpred_adj.cj$HAR_pred - EU_outpred_adj.cj$true,
+                             dHAR_adj.CJ = EU_outpred_adj.cj$dHAR_pred - EU_outpred_adj.cj$true,
+                             naive_adj.CJ = EU_outpred_adj.cj$naive_pred - EU_outpred_adj.cj$true,
+                             HAR_RVcd = EU_HAR_outpred_cd$HAR_pred - EU_HAR_outpred_cd$true,
+                             dHAR_RVcd = EU_HAR_outpred_cd$dHAR_pred - EU_HAR_outpred_cd$true,
+                             naive_RVcd = EU_HAR_outpred_cd$naive_pred - EU_HAR_outpred_cd$true,
+                             SHAR_RVcd = EU_SHAR_outpred_cd$SHAR_pred - EU_SHAR_outpred_cd$true,
+                             dSHAR_RVcd = EU_SHAR_outpred_cd$dSHAR_pred - EU_SHAR_outpred_cd$true,
+                             naive_sRVcd = EU_SHAR_outpred_cd$naive_pred - EU_SHAR_outpred_cd$true,
+                             HAR_RVJ = EU_HAR_RVJ_outpred$fit - EU_HAR_RVJ_outpred$true,
+                             HAR_BVJ = EU_HAR_BVJ_outpred$fit - EU_HAR_BVJ_outpred$true,
+                             HAR_RVCJ = EU_HAR_RVCJ_outpred$fit - EU_HAR_RVCJ_outpred$true,
+                             HAR_RVcd = EU_HAR_RVcd_outpred$fit - EU_HAR_RVcd_outpred$true,
+                             SHAR_RVJ = EU_SHAR_RVJ_outpred$fit - EU_SHAR_RVJ_outpred$true)
+
+sigma_outpred_err_list = list(HAR_BV = EU_HAR_outpred_bv$fit - EU_HAR_outpred_bv$true,
+                              HAR_adjC = EU_HAR_outpred_adj.c$pred - EU_HAR_outpred_adj.c$true,
+                              HAR_RVc = EU_HAR_outpred_c$fit - EU_HAR_outpred_c$true,
+                              SHAR_RVc = EU_SHAR_outpred_c$fit - EU_SHAR_outpred_c$true)
+```
+
+```{r}
+RV_model_summary <- matrix(nrow=length(names(RVol_inpred_err_list)), ncol=4,
+                           dimnames=list(names(RVol_inpred_err_list), 
+                                         c('in-samp MSE', 'out-samp MSE', 'in-samp p', 'out-samp p')))
+for (i in 1:length(names(RVol_inpred_err_list))){
+  RV_model_summary[i, 1] = mean(RVol_inpred_err_list[[i]]^2)
+  RV_model_summary[i, 2] = mean(RVol_outpred_err_list[[i]]^2)
+  RV_model_summary[i, 3] = tryCatch(dm.test(RVol_inpred_err_list[[1]], RVol_inpred_err_list[[i]],
+                                            alternative='greater', power=2)$p.value, error = function(x) NA)
+  RV_model_summary[i, 4] = tryCatch(dm.test(RVol_outpred_err_list[[1]], RVol_outpred_err_list[[i]],
+                                            alternative='greater', power=2)$p.value, error = function(x) NA)
+}
+
+sigma_model_summary <- matrix(nrow=length(names(sigma_inpred_err_list)), ncol=4,
+                              dimnames=list(names(sigma_inpred_err_list), 
+                                            c('in-samp MSE', 'out-samp MSE', 'in-samp p', 'out-samp p')))
+for (i in 1:length(names(sigma_inpred_err_list))){
+  sigma_model_summary[i, 1] = mean(sigma_inpred_err_list[[i]]^2)
+  sigma_model_summary[i, 2] = mean(sigma_outpred_err_list[[i]]^2)
+  sigma_model_summary[i, 3] = tryCatch(dm.test(sigma_inpred_err_list[[1]], sigma_inpred_err_list[[i]],
+                                               alternative='greater', power=2)$p.value, error = function(x) NA)
+  sigma_model_summary[i, 4] = tryCatch(dm.test(sigma_outpred_err_list[[1]], sigma_outpred_err_list[[i]],
+                                               alternative='greater', power=2)$p.value, error = function(x) NA)
+}
+```
+
+```{r eval=FALSE, include=FALSE}
+DM_p_value <- matrix(nrow=length(names(RVol_inpred_err_list)), ncol=length(names(RVol_inpred_err_list)),
+                     dimnames=list(names(RVol_inpred_err_list), names(RVol_inpred_err_list)))
+for (i in 1:(length(names(RVol_inpred_err_list))-1)){
+  for (j in (i+1):length(names(RVol_inpred_err_list))){
+    DM_p_value[i,j] = dm.test(RVol_inpred_err_list[[i]], RVol_inpred_err_list[[j]], 
+                              alternative='greater', power=2)$p.value
+    DM_p_value[j,i] = dm.test(RVol_inpred_err_list[[j]], RVol_inpred_err_list[[i]], 
+                              alternative='greater', power=2)$p.value
+  }
+}
+```
+
+
+

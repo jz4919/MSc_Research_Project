@@ -1,0 +1,554 @@
+---
+title: "univariate_probability_forecast"
+author: "CID: 01714151"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## build functions
+```{r}
+# define function that computes LS score
+comp_LS_score <- function(y, object){
+  fy = dghyp(y, object)
+  return(-log(fy))
+}
+
+# Define function that computes the one-day forecast of the HAR model
+comp_har_prob <- function(train_start=22, train_end, dat){
+  # Obtain RV_{t+1} as the training y
+  y = dat[(train_start+1):(train_end+1)]
+  # Obtain RV_{t}, RV_{t:t-4}, RV_{t:t-22} as the training X
+  x_d = dat[train_start:train_end]
+  x_w = unlist(lapply(train_start:train_end, function(index){comp_mean(index, period=5, dat=dat)}))
+  x_m = unlist(lapply(train_start:train_end, function(index){comp_mean(index, period=22, dat=dat)}))
+  # Fit the HAR model with the training model
+  har = lm(y~x_d + x_w + x_m)
+  # Make point prediction on RV_{t+2}
+  pred = predict(har, data.frame(x_d=dat[train_end+1], x_w=comp_mean(train_end+1, 5, dat), x_m=comp_mean(train_end+1, 22, dat)))
+  # Get models
+  aic.uv <- stepAIC.ghyp(har$residuals)
+  best_model <- aic.uv$best.model
+  gauss_model <- fit.gaussuv(har$residuals)
+  NIG_model <- fit.NIGuv(har$residuals)
+  # Get PIT diagram
+  best_PIT <- pghyp(dat[train_end+2]- pred, best_model)
+  gauss_PIT <- pghyp(dat[train_end+2]- pred, gauss_model)
+  NIG_PIT <- pghyp(dat[train_end+2]- pred, NIG_model)
+  # Get LS score
+  best_LS <- comp_LS_score(dat[train_end+2]- pred, best_model)
+  gauss_LS <- comp_LS_score(dat[train_end+2]- pred, gauss_model)
+  NIG_LS <- comp_LS_score(dat[train_end+2]- pred, NIG_model)
+  # Get Quantiles
+  best_quant <- qghyp(c(0.95, 0.85, 0.75, 0.65, 0.55, 0.45, 0.35, 0.25, 0.15, 0.05), best_model) + pred
+  gauss_quant <- qghyp(c(0.95, 0.85, 0.75, 0.65, 0.55, 0.45, 0.35, 0.25, 0.15, 0.05), gauss_model) + pred
+  NIG_quant <- qghyp(c(0.95, 0.85, 0.75, 0.65, 0.55, 0.45, 0.35, 0.25, 0.15, 0.05), NIG_model) + pred
+  # Return the fitted model and the one-day forecast
+  return(list(pred=pred, PIT=c(gauss_PIT, NIG_PIT, best_PIT), LS = c(gauss_LS, NIG_LS, best_LS), quant = rbind(gauss_quant, NIG_quant, best_quant)))
+}
+
+# Define function that computes the one-day forecast of the C+J model
+comp_har_CJ_prob <- function(train_start=22, train_end, C_dat, J_dat, true_dat){
+  # Fit HAR model with C part
+  C_y = C_dat[(train_start+1):(train_end+1)]
+  C_x_d = C_dat[train_start:train_end]
+  C_x_w = unlist(lapply(train_start:train_end, function(index){comp_mean(index, period=5, dat=C_dat)}))
+  C_x_m = unlist(lapply(train_start:train_end, function(index){comp_mean(index, period=22, dat=C_dat)}))
+  C_har = lm(C_y~C_x_d + C_x_w + C_x_m)
+  # Fit HAR model with C part
+  J_y = J_dat[(train_start+1):(train_end+1)]
+  J_x_d = J_dat[train_start:train_end]
+  J_x_w = unlist(lapply(train_start:train_end, function(index){comp_mean(index, period=5, dat=J_dat)}))
+  J_x_m = unlist(lapply(train_start:train_end, function(index){comp_mean(index, period=22, dat=J_dat)}))
+  J_har = lm(J_y~J_x_d + J_x_w + J_x_m)
+  # in-sample pred
+  in_RV_pred = log(exp(predict(C_har))+exp(predict(J_har))-1e-6)
+  in_residuals = true_dat[(train_start+1):(train_end+1)] - in_RV_pred
+  # out-of-sample pred
+  C_pred = predict(C_har, data.frame(C_x_d=C_dat[train_end+1], C_x_w=comp_mean(train_end+1, 5, C_dat), C_x_m=comp_mean(train_end+1, 22, C_dat)))
+  J_pred = predict(J_har, data.frame(J_x_d=J_dat[train_end+1], J_x_w=comp_mean(train_end+1, 5, J_dat), J_x_m=comp_mean(train_end+1, 22, J_dat)))
+  out_RV_pred = log(exp(C_pred)+exp(J_pred)-1e-6)
+  # get residual models
+  aic.uv <- stepAIC.ghyp(in_residuals)
+  best_model <- aic.uv$best.model
+  gauss_model <- fit.gaussuv(in_residuals)
+  NIG_model <- fit.NIGuv(in_residuals)
+  # Get PIT diagram
+  best_PIT <- pghyp(true_dat[train_end+2]- out_RV_pred, best_model)
+  gauss_PIT <- pghyp(true_dat[train_end+2]- out_RV_pred, gauss_model)
+  NIG_PIT <- pghyp(true_dat[train_end+2]- out_RV_pred, NIG_model)
+  # Get LS score
+  best_LS <- comp_LS_score(true_dat[train_end+2]- out_RV_pred, best_model)
+  gauss_LS <- comp_LS_score(true_dat[train_end+2]- out_RV_pred, gauss_model)
+  NIG_LS <- comp_LS_score(true_dat[train_end+2]- out_RV_pred, NIG_model)
+  # Get Quantiles
+  best_quant <- qghyp(c(0.95, 0.85, 0.75, 0.65, 0.55, 0.45, 0.35, 0.25, 0.15, 0.05), best_model) + out_RV_pred
+  gauss_quant <- qghyp(c(0.95, 0.85, 0.75, 0.65, 0.55, 0.45, 0.35, 0.25, 0.15, 0.05), gauss_model) + out_RV_pred
+  NIG_quant <- qghyp(c(0.95, 0.85, 0.75, 0.65, 0.55, 0.45, 0.35, 0.25, 0.15, 0.05), NIG_model) + out_RV_pred
+  # Return the fitted model and the one-day forecast
+  return(list(pred=out_RV_pred, PIT=c(gauss_PIT, NIG_PIT, best_PIT), LS = c(gauss_LS, NIG_LS, best_LS), quant = rbind(gauss_quant, NIG_quant, best_quant)))
+}
+
+# Define function that computes the one-day forecast of the C+dJ model
+comp_har_CdJ_prob <- function(train_start=22, train_end, C_dat, J_dat, true_dat){
+  # Fit HAR model with C part
+  C_y = C_dat[(train_start+1):(train_end+1)]
+  C_x_d = C_dat[train_start:train_end]
+  C_x_w = unlist(lapply(train_start:train_end, function(index){comp_mean(index, period=5, dat=C_dat)}))
+  C_x_m = unlist(lapply(train_start:train_end, function(index){comp_mean(index, period=22, dat=C_dat)}))
+  C_har = lm(C_y~C_x_d + C_x_w + C_x_m)
+  # Fit HAR model with C part
+  J_y = J_dat[(train_start+1):(train_end+1)]
+  J_x_d = J_dat[train_start:train_end]
+  J_har = lm(J_y~J_x_d)
+  # in-sample pred
+  in_RV_pred = log(exp(predict(C_har))+exp(predict(J_har))-1e-6)
+  in_residuals = true_dat[(train_start+1):(train_end+1)] - in_RV_pred
+  # out-of-sample pred
+  C_pred = predict(C_har, data.frame(C_x_d=C_dat[train_end+1], C_x_w=comp_mean(train_end+1, 5, C_dat), C_x_m=comp_mean(train_end+1, 22, C_dat)))
+  J_pred = predict(J_har, data.frame(J_x_d=J_dat[train_end+1], J_x_w=comp_mean(train_end+1, 5, J_dat), J_x_m=comp_mean(train_end+1, 22, J_dat)))
+  out_RV_pred = log(exp(C_pred)+exp(J_pred)-1e-6)
+  # get residual models
+  aic.uv <- stepAIC.ghyp(in_residuals)
+  best_model <- aic.uv$best.model
+  gauss_model <- fit.gaussuv(in_residuals)
+  NIG_model <- fit.NIGuv(in_residuals)
+  # Get PIT diagram
+  best_PIT <- pghyp(true_dat[train_end+2]- out_RV_pred, best_model)
+  gauss_PIT <- pghyp(true_dat[train_end+2]- out_RV_pred, gauss_model)
+  NIG_PIT <- pghyp(true_dat[train_end+2]- out_RV_pred, NIG_model)
+  # Get LS score
+  best_LS <- comp_LS_score(true_dat[train_end+2]- out_RV_pred, best_model)
+  gauss_LS <- comp_LS_score(true_dat[train_end+2]- out_RV_pred, gauss_model)
+  NIG_LS <- comp_LS_score(true_dat[train_end+2]- out_RV_pred, NIG_model)
+  # Get Quantiles
+  best_quant <- qghyp(c(0.95, 0.85, 0.75, 0.65, 0.55, 0.45, 0.35, 0.25, 0.15, 0.05), best_model) + out_RV_pred
+  gauss_quant <- qghyp(c(0.95, 0.85, 0.75, 0.65, 0.55, 0.45, 0.35, 0.25, 0.15, 0.05), gauss_model) + out_RV_pred
+  NIG_quant <- qghyp(c(0.95, 0.85, 0.75, 0.65, 0.55, 0.45, 0.35, 0.25, 0.15, 0.05), NIG_model) + out_RV_pred
+  # Return the fitted model and the one-day forecast
+  return(list(pred=out_RV_pred, PIT=c(gauss_PIT, NIG_PIT, best_PIT), LS = c(gauss_LS, NIG_LS, best_LS), quant = rbind(gauss_quant, NIG_quant, best_quant)))
+}
+
+# Define function that plot PIT for each prob forecast
+outprob_PIT <- function(outprob_results){
+  PIT <- matrix(nrow = 43, ncol = 3)
+  colnames(PIT) <- c("gauss", "NIG", "best")
+  for (i in 1:43){
+    PIT[i,] = outprob_results[[i]][["PIT"]]
+  }
+  gauss_PIT = hist(PIT[,1], main='PIT histogram of gauss distirbution', xlab="PIT")
+  NIG_PIT = hist(PIT[,2], main='PIT histogram of NIG distirbution', xlab="PIT")
+  best_PIT = hist(PIT[,3], main='PIT histogram of the best distribution', xlab="PIT")
+  return(list(gauss_PIT=gauss_PIT, NIG_PIT = NIG_PIT, best_PIT=best_PIT))
+}
+
+# Define function that computes LS score for each prob forecast
+outprob_LS <- function(outprob_results){
+  LS <- matrix(nrow = 43, ncol = 3)
+  colnames(LS) <- c("gauss", "NIG", "best")
+  for (i in 1:43){
+    LS[i,] = outprob_results[[i]][["LS"]]
+    }
+  return(colMeans(LS))
+  }
+
+# Define function that computes the quantiles for each prob forecast
+outprob_quantile <- function(outprob_results){
+  best_mat = matrix(nrow = 43, ncol = 10)
+  gauss_mat = matrix(nrow = 43, ncol = 10)
+  NIG_mat = matrix(nrow = 43, ncol = 10)
+  for (i in 1:43){
+    gauss_mat[i,] = outprob_results[[i]][["quant"]][1,]
+    NIG_mat[i,] = outprob_results[[i]][["quant"]][2,]
+    best_mat[i,] = outprob_results[[i]][["quant"]][3,]
+  }
+  return(list(gauss_quant=gauss_mat, NIG_quant=NIG_mat, best_quant=best_mat))
+}
+
+# Define function that plot the out-of-sample prob forecast
+plot_outprob <- function(outprob_results, type_quant, title){
+  quant <- outprob_quantile(outprob_results)[[type_quant]]
+  outprob_plot <- ggplot() +
+    geom_line(data=data.frame(x=EU_daily_23$date, y=log(EU_daily_23$rvol^2)), aes(x = x, y = y, color = "log(RV)")) +
+    geom_ribbon(data=data.frame(x=EU_HAR_outpred$date, lwr = quant[,10], upr=quant[,1]), 
+                aes(x=x, ymin=lwr, ymax=upr), fill='steelblue', alpha=0.3)+
+    geom_ribbon(data=data.frame(x=EU_HAR_outpred$date, lwr = quant[,9], upr=quant[,2]), 
+                aes(x=x, ymin=lwr, ymax=upr), fill='steelblue', alpha=0.3)+
+    geom_ribbon(data=data.frame(x=EU_HAR_outpred$date, lwr = quant[,8], upr=quant[,3]), 
+                aes(x=x, ymin=lwr, ymax=upr), fill='steelblue', alpha=0.3)+
+    geom_ribbon(data=data.frame(x=EU_HAR_outpred$date, lwr = quant[,7], upr=quant[,4]), 
+                aes(x=x, ymin=lwr, ymax=upr), fill='steelblue', alpha=0.3)+
+    geom_ribbon(data=data.frame(x=EU_HAR_outpred$date, lwr = quant[,6], upr=quant[,5]), 
+                aes(x=x, ymin=lwr, ymax=upr), fill='steelblue', alpha=0.3) +
+    scale_color_manual(name=NULL, values=c('log(RV)' = 'black')) +
+    ggtitle(title) + ylab("log(RV)") + xlab("Date") +
+    theme_classic() +
+    theme(axis.title = element_text(size= 12.5),
+          axis.text = element_text(size= 11.5),
+          legend.title = element_text(size= 11),
+          legend.text = element_text(size= 11),
+          legend.position = c(0.9, 0.85))
+  return(outprob_plot)
+}
+
+# Define function that test the CI of in-prob forecast
+in_quantile_test <- function(point_pred, residual_model){
+  true = EU_HAR_inpred$true
+  lwr = qghyp(0.05, residual_model) + point_pred
+  upr = qghyp(0.95, residual_model) + point_pred
+  return(mean((true<=upr)&(true>=lwr)))
+}
+
+# Define function that test the CI of out-prob forecast
+out_quantile_test <- function(outprob_results, type_quant){
+  quant <- outprob_quantile(outprob_results)[[type_quant]]
+  true <- tail(log(EU_daily_23$rvol^2),43)
+  lwr = quant[,10] 
+  upr=quant[,1]
+  return(mean((true<=upr)&(true>=lwr)))
+}
+
+# Define function that plot the in-sample prob forecast 
+plot_inprob <- function(point_pred, residual_model, title){
+  inprob_plot <- ggplot() +
+  geom_line(data=data.frame(x=EU_HAR_inpred$date, y=EU_HAR_inpred$true), 
+            aes(x = x, y = y, color = "log(RV)")) +
+  geom_ribbon(data=data.frame(x=EU_HAR_inpred$date, 
+                              lwr = qghyp(0.05, residual_model) + point_pred,
+                              upr = qghyp(0.95, residual_model) + point_pred),
+              aes(x = x, ymin = lwr, ymax=upr), fill = "steelblue", alpha=0.3) +
+  geom_ribbon(data=data.frame(x=EU_HAR_inpred$date, 
+                              lwr = qghyp(0.15, residual_model) + point_pred,
+                              upr = qghyp(0.85, residual_model) + point_pred),
+              aes(x = x, ymin = lwr, ymax=upr), fill = "steelblue", alpha=0.3) +
+  geom_ribbon(data=data.frame(x=EU_HAR_inpred$date, 
+                              lwr = qghyp(0.25, residual_model) + point_pred,
+                              upr = qghyp(0.75, residual_model) + point_pred),
+              aes(x = x, ymin = lwr, ymax=upr), fill = "steelblue", alpha=0.3) +
+  geom_ribbon(data=data.frame(x=EU_HAR_inpred$date, 
+                              lwr = qghyp(0.35, residual_model) + point_pred,
+                              upr = qghyp(0.65, residual_model) + point_pred),
+              aes(x = x, ymin = lwr, ymax=upr), fill = "steelblue", alpha=0.3) +
+  geom_ribbon(data=data.frame(x=EU_HAR_inpred$date, 
+                              lwr = qghyp(0.45, residual_model) + point_pred,
+                              upr = qghyp(0.55, residual_model) + point_pred),
+              aes(x = x, ymin = lwr, ymax=upr), fill = "steelblue", alpha=0.3) +
+  scale_color_manual(name=NULL, values=c('log(RV)' = 'black')) +
+  ggtitle(title) + ylab("log(RV)") + xlab("Date") +
+  theme_classic() +
+  theme(axis.title = element_text(size= 12.5),
+        axis.text = element_text(size= 11.5),
+        legend.title = element_text(size= 11),
+        legend.text = element_text(size= 11),
+        legend.position = c(0.9, 0.85))
+  return(inprob_plot)
+}
+```
+
+## Initiate summary table
+```{r}
+prob_inLS_summary <- matrix(nrow=5, ncol=3,
+                            dimnames=list(c('HAR_RV', 'HAR_BV+J', 'HAR_BV+dJ', 
+                                            'HAR_adj.C+J', 'HAR_adj.C+dJ'), 
+                                          c('gauss', 'NIG', 'best')))
+prob_outLS_summary <- matrix(nrow=5, ncol=3,
+                             dimnames=list(c('HAR_RV', 'HAR_BV+J', 'HAR_BV+dJ', 
+                                             'HAR_adj.C+J', 'HAR_adj.C+dJ'), 
+                                           c('gauss', 'NIG', 'best')))
+```
+
+
+## RV_HAR
+```{r}
+ggplot() +
+  # Add a histogram layer
+  geom_histogram(aes(x = log(EU_daily4$rvar[23:257])- predict(EU_HAR_in_model), y = after_stat(density)), bins = 15, fill = "lightgrey", color = "grey") +
+  # Add a stat_function layer to plot the normal distribution curve
+  stat_function(
+    fun = function(x) dnorm(x, mean = 5.909221e-15, sd = 4.542358e-01),
+    aes(color = "Gauss"), linewidth = 1
+  ) +
+  stat_function(
+    fun = function(x) dghyp(x, object = RV_HAR_aic.uv$best.model),
+    aes(color = "VG"), linewidth = 1
+  ) +
+  # Customize color and size aesthetics
+  scale_color_manual(values = c("Gauss" = "steelblue", "VG" = "darkgreen")) +
+  labs(title = NULL,
+       x = "Residuals for HAR_RV", y = "Density") +
+    theme_classic() +
+    theme(axis.title = element_text(size= 12.5),
+          axis.text = element_text(size= 11.5),
+          legend.title = element_blank(),
+          legend.text = element_text(size= 11),
+          legend.position = c(0.9, 0.85))
+```
+
+
+### in-sample
+```{r}
+### PIT diagram
+# Gaussian distribution
+hist(pghyp(log(EU_daily4$rvar[23:257])- predict(EU_HAR_in_model), gauss(0, 0.4552053)), main="PIT histogram of gauss distribution", xlab="PIT")
+# NIG distribution
+hist(pghyp(log(EU_daily4$rvar[23:257])- predict(EU_HAR_in_model), RV_HAR_aic.uv$all.models[[4]]), main="PIT histogram of NIG distribution", xlab="PIT")
+# VR distribution
+hist(pghyp(log(EU_daily4$rvar[23:257])- predict(EU_HAR_in_model), RV_HAR_aic.uv$best.model), main="PIT histogram of VR distribution", xlab="PIT")
+acf(pghyp(log(EU_daily4$rvar[23:257])- predict(EU_HAR_in_model), RV_HAR_aic.uv$best.model), main="ACF of PIT of VR")
+
+### LS score
+prob_inLS_summary['HAR_RV',] = c(
+  # Gaussian distribution
+  mean(comp_LS_score(log(EU_daily4$rvar[23:257])-predict(EU_HAR_in_model), gauss(0, 0.4552053))),
+  # NIG distribution
+  mean(comp_LS_score(log(EU_daily4$rvar[23:257])-predict(EU_HAR_in_model), RV_HAR_aic.uv$all.models[[4]])),
+  # VR distribution
+  mean(comp_LS_score(log(EU_daily4$rvar[23:257])-predict(EU_HAR_in_model), RV_HAR_aic.uv$best.model))
+)
+
+### in-sample probabilistic forecast plot
+plot_inprob(predict(EU_HAR_in_model), gauss(0, 0.4558964), "In-sample probablistic forecast plot for HAR_RV with gauss distritbution")
+
+plot_inprob(predict(EU_HAR_in_model), RV_HAR_aic.uv$best.model, "In-sample probablistic forecast plot for HAR_RV with VR distritbution")
+```
+
+### out-of-sample
+```{r message=FALSE, include=FALSE}
+EU_HAR_outprob <- lapply(EU_roll_start:EU_roll_end, function(x){comp_har_prob(x-train_length, x, log(EU_daily$rvol^2))})
+```
+```{r}
+outprob_PIT(EU_HAR_outprob)
+
+outprob_LS(EU_HAR_outprob)
+prob_outLS_summary['HAR_RV',] <- outprob_LS(EU_HAR_outprob)
+
+plot_outprob(EU_HAR_outprob, 'best_quant', "Out-of-sample probablistic forecast plot for HAR_RV with the best distritbution")
+```
+### DS score
+```{r eval=FALSE, include=FALSE}
+library(VarianceGamma)
+comp_dss_score <- function(obs, mean, sigma){
+  dff <- (obs-mean)^2/sigma^2 + 2*log(sigma)
+  return(dff)
+}
+mean(unlist(lapply(log(EU_daily4$rvar[23:257])-predict(EU_HAR_in_model), function(obs){comp_dss_score(obs, 0, 0.4558964)})))
+mean(unlist(lapply(log(EU_daily4$rvar[23:257])-predict(EU_HAR_in_model), function(obs){comp_dss_score(obs, vgMean(vgC = -0.3406849, sigma = 0.3981939, theta = 0.3407129, nu = 1/2.0180085), sqrt(vgVar(vgC = -0.3406849, sigma = 0.3981939, theta = 0.3407129, nu = 1/2.0180085)))})))
+
+#var(rghyp(100000, VG(lambda=2.0180085, mu=-0.3406849, sigma=0.3981939, gamma=0.3407129)))
+
+# Plot the HAR in-sample forecast
+EU_HAR_inprob_plot <- ggplot(data=EU_HAR_inpred, aes(x=date)) +
+  geom_line(aes(y=true, color='log(RV)')) +
+  #geom_line(aes(y=pred, color='HAR_RV pred')) +
+  geom_ribbon(data=data.frame(x=EU_HAR_inpred$date, 
+                              lwr = qnorm(0.05, predict(EU_HAR_in_model), 0.4558964),
+                              upr = qnorm(0.95, predict(EU_HAR_in_model), 0.4558964)),
+              aes(x = x, ymin = lwr, ymax=upr), fill = "steelblue", alpha=0.3) +
+  geom_ribbon(data=data.frame(x=EU_HAR_inpred$date, 
+                              lwr = qnorm(0.15, predict(EU_HAR_in_model), 0.4558964),
+                              upr = qnorm(0.85, predict(EU_HAR_in_model), 0.4558964)),
+              aes(x = x, ymin = lwr, ymax=upr), fill = "steelblue", alpha=0.3) +
+  geom_ribbon(data=data.frame(x=EU_HAR_inpred$date, 
+                              lwr = qnorm(0.25, predict(EU_HAR_in_model), 0.4558964),
+                              upr = qnorm(0.75, predict(EU_HAR_in_model), 0.4558964)),
+              aes(x = x, ymin = lwr, ymax=upr), fill = "steelblue", alpha=0.3) +
+  geom_ribbon(data=data.frame(x=EU_HAR_inpred$date, 
+                              lwr = qnorm(0.35, predict(EU_HAR_in_model), 0.4558964),
+                              upr = qnorm(0.65, predict(EU_HAR_in_model), 0.4558964)),
+              aes(x = x, ymin = lwr, ymax=upr), fill = "steelblue", alpha=0.3) +
+  geom_ribbon(data=data.frame(x=EU_HAR_inpred$date, 
+                              lwr = qnorm(0.45, predict(EU_HAR_in_model), 0.4558964),
+                              upr = qnorm(0.55, predict(EU_HAR_in_model), 0.4558964)),
+              aes(x = x, ymin = lwr, ymax=upr), fill = "steelblue", alpha=0.3) +
+  scale_color_manual(name=NULL, values=c('log(RV)' = 'black')) +
+  #ggtitle("HAR in-sample Forecast on EURUSD from 2022 May - 2023 Apr") +
+  ylab("log(RV)") +
+  xlab("Date") +
+  theme_classic() +
+  theme(axis.title = element_text(size= 12.5),
+        axis.text = element_text(size= 11.5),
+        legend.title = element_text(size= 11),
+        legend.text = element_text(size= 11),
+        legend.position = c(0.9, 0.85))
+
+EU_HAR_inprob_plot
+```
+
+
+
+
+## HAR_BV+J
+### in-sample
+```{r}
+### PIT diagram
+# Gaussian distribution
+hist(pghyp(EU_inpred_bvJ$true - EU_inpred_bvJ$HAR_pred, gauss(0, 0.4483725)), main="PIT histogram of gauss distribution", xlab="PIT")
+# NIG distribution
+hist(pghyp(EU_inpred_bvJ$true - EU_inpred_bvJ$HAR_pred, HAR_BVJ_aic.uv$all.models[[4]]), main="PIT histogram of NIG distribution", xlab="PIT")
+# VR distribution
+hist(pghyp(EU_inpred_bvJ$true - EU_inpred_bvJ$HAR_pred, HAR_BVJ_aic.uv$best.model), main="PIT histogram of VR distribution", xlab="PIT")
+acf(pghyp(EU_inpred_bvJ$true - EU_inpred_bvJ$HAR_pred, HAR_BVJ_aic.uv$best.model), main="ACF of PIT of VR")
+
+### LS score
+prob_inLS_summary['HAR_BV+J',] = c(
+  # Gaussian distribution
+  mean(comp_LS_score(EU_inpred_bvJ$true-EU_inpred_bvJ$HAR_pred, gauss(0, 0.4483725))),
+  # NIG distribution
+  mean(comp_LS_score(EU_inpred_bvJ$true-EU_inpred_bvJ$HAR_pred, HAR_BVJ_aic.uv$all.models[[4]])),
+  # VR distribution
+  mean(comp_LS_score(EU_inpred_bvJ$true-EU_inpred_bvJ$HAR_pred, HAR_BVJ_aic.uv$best.model)))
+
+plot_inprob(EU_inpred_bvJ$HAR_pred, HAR_BVJ_aic.uv$best.model, "In-sample probablistic forecast plot for HAR_BV+J with VR distritbution")
+```
+### out-of-sample
+```{r message=FALSE, include=FALSE}
+EU_HAR_BVJ_outprob <- lapply(EU_roll_start:EU_roll_end, function(x){comp_har_CJ_prob(x-train_length, x, log(EU_daily2$rbpv*mu1^(-2)), log(EU_daily2$jump+1e-6), log(EU_daily2$rvar))})
+```
+```{r}
+outprob_PIT(EU_HAR_BVJ_outprob)
+
+outprob_LS(EU_HAR_BVJ_outprob)
+prob_outLS_summary['HAR_BV+J',] <- outprob_LS(EU_HAR_BVJ_outprob)
+
+plot_outprob(EU_HAR_BVJ_outprob, 'best_quant', "Out-of-sample probablistic forecast plot for HAR_BV+J with the best distritbution")
+```
+
+
+
+## HAR_BV+dJ
+### in-sample
+```{r}
+### PIT diagram
+# Gaussian distribution
+hist(pghyp(EU_inpred_bvJ$true - EU_inpred_bvJ$dHAR_pred, gauss(0, 0.4481823)), main="PIT histogram of gauss distribution", xlab="PIT")
+# NIG distribution
+hist(pghyp(EU_inpred_bvJ$true - EU_inpred_bvJ$dHAR_pred, HAR_BVdJ_aic.uv$all.models[[4]]), main="PIT histogram of NIG distribution", xlab="PIT")
+# VR distribution
+hist(pghyp(EU_inpred_bvJ$true - EU_inpred_bvJ$dHAR_pred, HAR_BVdJ_aic.uv$best.model), main="PIT histogram of VR distribution", xlab="PIT")
+acf(pghyp(EU_inpred_bvJ$true - EU_inpred_bvJ$dHAR_pred, HAR_BVdJ_aic.uv$best.model), main="ACF of PIT of VR")
+
+### LS score
+prob_inLS_summary['HAR_BV+dJ',] = c(
+  # Gaussian distribution
+  mean(comp_LS_score(EU_inpred_bvJ$true-EU_inpred_bvJ$dHAR_pred, gauss(0, 0.4481823))),
+  # NIG distribution
+  mean(comp_LS_score(EU_inpred_bvJ$true-EU_inpred_bvJ$dHAR_pred, HAR_BVdJ_aic.uv$all.models[[4]])),
+  # VR distribution
+  mean(comp_LS_score(EU_inpred_bvJ$true-EU_inpred_bvJ$dHAR_pred, HAR_BVdJ_aic.uv$best.model))
+)
+
+plot_inprob(EU_inpred_bvJ$dHAR_pred, HAR_BVdJ_aic.uv$best.model, "In-sample probablistic forecast plot for HAR_BV+dJ with VR distritbution")
+```
+
+### out-of-sample
+```{r message=FALSE, include=FALSE}
+EU_HAR_BVdJ_outprob <- lapply(EU_roll_start:EU_roll_end, function(x){comp_har_CdJ_prob(x-train_length, x, log(EU_daily2$rbpv*mu1^(-2)), log(EU_daily2$jump+1e-6), log(EU_daily2$rvar))})
+```
+```{r}
+outprob_PIT(EU_HAR_BVdJ_outprob)
+
+outprob_LS(EU_HAR_BVdJ_outprob)
+prob_outLS_summary['HAR_BV+dJ',] <- outprob_LS(EU_HAR_BVdJ_outprob)
+
+plot_outprob(EU_HAR_BVdJ_outprob, 'best_quant', "Out-of-sample probabilistic forecast plot for HAR_BV+dJ with the best distribution")
+```
+
+## HAR_adj.C+J
+### in-sample
+```{r}
+### PIT diagram
+# Gaussian distribution
+hist(pghyp(EU_inpred_adj.cj$true - EU_inpred_adj.cj$HAR_pred, gauss(0, 0.4483555)), main="PIT histogram of gauss distribution", xlab="PIT")
+# NIG distribution
+hist(pghyp(EU_inpred_adj.cj$true - EU_inpred_adj.cj$HAR_pred, HAR_adjCJ_aic.uv$all.models[[4]]), main="PIT histogram of NIG distribution", xlab="PIT")
+# VR distribution
+hist(pghyp(EU_inpred_adj.cj$true - EU_inpred_adj.cj$HAR_pred, HAR_adjCJ_aic.uv$best.model), main="PIT histogram of VR distribution", xlab="PIT")
+acf(pghyp(EU_inpred_adj.cj$true - EU_inpred_adj.cj$HAR_pred, HAR_adjCJ_aic.uv$best.model), main="ACF of PIT of VR")
+
+### LS score
+prob_inLS_summary['HAR_adj.C+J',] = c(
+  # Gaussian distribution
+  mean(comp_LS_score(EU_inpred_adj.cj$true - EU_inpred_adj.cj$HAR_pred, gauss(0, 0.4483555))),
+  # NIG distribution
+  mean(comp_LS_score(EU_inpred_adj.cj$true - EU_inpred_adj.cj$HAR_pred, HAR_adjCJ_aic.uv$all.models[[4]])),
+  # VR distribution
+  mean(comp_LS_score(EU_inpred_adj.cj$true - EU_inpred_adj.cj$HAR_pred, HAR_adjCJ_aic.uv$best.model))
+)
+```
+### out-of-sample
+```{r message=FALSE, include=FALSE}
+EU_HAR_adj.CJ_outprob <- lapply(EU_roll_start:EU_roll_end, function(x){comp_har_CJ_prob(x-train_length, x, log(EU_daily4$adj.c), log(EU_daily4$adj.j+1e-6), log(EU_daily2$rvar))})
+```
+```{r}
+outprob_PIT(EU_HAR_adj.CJ_outprob)
+
+outprob_LS(EU_HAR_adj.CJ_outprob)
+prob_outLS_summary['HAR_adj.C+J',] <- outprob_LS(EU_HAR_adj.CJ_outprob)
+
+plot_outprob(EU_HAR_adj.CJ_outprob, 'best_quant', "Out-of-sample probablistic forecast plot for HAR_adj.C+J with the best distritbution")
+```
+
+## HAR_adj.C+dJ
+### in-sample
+```{r}
+### PIT diagram
+# Gaussian distribution
+hist(pghyp(EU_inpred_adj.cj$true - EU_inpred_adj.cj$dHAR_pred, gauss(0, 0.4483475)), main="PIT histogram of gauss distribution", xlab="PIT")
+# NIG distribution
+hist(pghyp(EU_inpred_adj.cj$true - EU_inpred_adj.cj$dHAR_pred, HAR_adjCdJ_aic.uv$all.models[[4]]), main="PIT histogram of NIG distribution", xlab="PIT")
+# VR distribution
+hist(pghyp(EU_inpred_adj.cj$true - EU_inpred_adj.cj$dHAR_pred, HAR_adjCdJ_aic.uv$best.model), main="PIT histogram of VR distribution", xlab="PIT")
+acf(pghyp(EU_inpred_adj.cj$true - EU_inpred_adj.cj$dHAR_pred, HAR_adjCdJ_aic.uv$best.model), main="ACF of PIT of VR")
+
+### LS score
+# Gaussian distribution
+prob_inLS_summary['HAR_adj.C+dJ',] = c(
+  mean(comp_LS_score(EU_inpred_adj.cj$true - EU_inpred_adj.cj$dHAR_pred, gauss(0, 0.4483475))),
+  # NIG distribution
+  mean(comp_LS_score(EU_inpred_adj.cj$true - EU_inpred_adj.cj$dHAR_pred, HAR_adjCdJ_aic.uv$all.models[[4]])),
+  # VR distribution
+  mean(comp_LS_score(EU_inpred_adj.cj$true - EU_inpred_adj.cj$dHAR_pred, HAR_adjCdJ_aic.uv$best.model))
+)
+```
+
+### out-of-sample
+```{r message=FALSE, include=FALSE}
+EU_HAR_adj.CdJ_outprob <- lapply(EU_roll_start:EU_roll_end, function(x){comp_har_CdJ_prob(x-train_length, x, log(EU_daily4$adj.c), log(EU_daily4$adj.j+1e-6), log(EU_daily2$rvar))})
+```
+```{r}
+outprob_PIT(EU_HAR_adj.CdJ_outprob)
+
+outprob_LS(EU_HAR_adj.CdJ_outprob)
+prob_outLS_summary['HAR_adj.C+dJ',] <- outprob_LS(EU_HAR_adj.CdJ_outprob)
+
+plot_outprob(EU_HAR_adj.CdJ_outprob, 'best_quant', "Out-of-sample probablistic forecast plot for HAR_adj.C+dJ with the best distritbution")
+```
+
+## HAR_RVJ
+### in-sample
+```{r eval=FALSE, include=FALSE}
+### PIT diagram
+# Gaussian distribution
+hist(pghyp(EU_HAR_RVJ_in_model$residuals, gauss(0, 0.4523051)), main="PIT histogram of gauss distribution", xlab="PIT")
+# NIG distribution
+hist(pghyp(EU_HAR_RVJ_in_model$residuals, HAR_RVJ_aic.uv$all.models[[4]]), main="PIT histogram of NIG distribution", xlab="PIT")
+# VR distribution
+hist(pghyp(EU_HAR_RVJ_in_model$residuals, HAR_RVJ_aic.uv$best.model), main="PIT histogram of VR distribution", xlab="PIT")
+acf(pghyp(EU_HAR_RVJ_in_model$residuals, HAR_RVJ_aic.uv$best.model), main="ACF of PIT of VR")
+
+### LS score
+prob_inLS_summary['HAR_RVJ',] <- c(
+  # Gaussian distribution
+  mean(comp_LS_score(EU_HAR_RVJ_in_model$residuals, gauss(0, 0.4523051))),
+  # NIG distribution
+  mean(comp_LS_score(EU_HAR_RVJ_in_model$residuals, HAR_RVJ_aic.uv$all.models[[4]])),
+  # VR distribution
+  mean(comp_LS_score(EU_HAR_RVJ_in_model$residuals, HAR_RVJ_aic.uv$best.model))
+)
+```
+
