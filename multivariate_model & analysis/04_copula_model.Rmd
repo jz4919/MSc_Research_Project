@@ -1,0 +1,256 @@
+---
+title: "multivariate_copula_model"
+author: "CID: 01714151"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(copula)
+library(VineCopula)
+library(ghyp)
+library(VC2copula)
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+#res1_distr <- stepAIC.ghyp(residuals(comp_har_pred(22, 256, log(bi_dat$EU_RV))$model))
+res1_distr <- stepAIC.ghyp(residuals(EU_HAR_in_model))
+res2_distr <- stepAIC.ghyp(residuals(AU_HAR_in_model))
+```
+```{r}
+res1_distr$fit.table
+res2_distr$fit.table
+```
+```{r}
+# Select the copula
+mul_dat <- data.frame(res1 = residuals(EU_HAR_in_model), 
+                      res2 = residuals(AU_HAR_in_model))
+var_a <- pobs(mul_dat)[,1]
+var_b <- pobs(mul_dat)[,2]
+selectedCopula <- BiCopSelect(var_a, var_b, familyset = NA)
+
+selectedCopula
+
+#gofCopula(normalCopula(dim=2), as.matrix(mul_dat), N=100)
+gofCopula(gumbelCopula(dim = 2), as.matrix(mul_dat), N = 100)
+#gofCopula(joeCopula(dim=2), as.matrix(mul_dat), N=100)
+```
+
+
+```{r eval=FALSE, include=FALSE}
+BB1_model <- BB1Copula(param=c(0.3, 2.27))
+m <- pobs(as.matrix(mul_dat))
+fit <- fitCopula(BB1_model, m, method = 'ml')
+coef(fit)
+
+# Build the bivariate distribution
+BB1_dist <- mvdc(BB1Copula(param=c(0.2989998, 2.2670807)), 
+                    margins = c("ghyp","ghyp"), 
+                    paramMargins = list(list(object=res1_distr$best.model), 
+                                        list(object=res2_distr$best.model)))
+
+# Generate random sample observations from the multivariate distribution
+
+```
+
+```{r}
+# Estimate copula parameters
+gumbel_model <- gumbelCopula(dim = 2)
+m <- pobs(as.matrix(mul_dat))
+fit <- fitCopula(gumbel_model, m, method = 'ml')
+coef(fit)
+```
+```{r}
+# Build the bivariate distribution
+gumbel_dist <- mvdc(gumbelCopula(param = 2.4361, dim = 2), 
+                    margins = c("ghyp","ghyp"), 
+                    paramMargins = list(list(object=res1_distr$best.model), 
+                                        list(object=res2_distr$best.model)))
+```
+```{r}
+# Generate random sample observations from the multivariate distribution
+# v <- rMvdc(1000, gumbel_dist)
+ggplot() +
+  geom_point(data = data.frame(res1=residuals(EU_HAR_in_model), 
+                               res2=residuals(AU_HAR_in_model)), aes(x=res1, y=res2), size=0.4) +
+  geom_density_2d_filled(data = data.frame(v), aes(x=v[,1], y=v[,2]), contour_var='ndensity', alpha=0.4) +
+  scale_x_continuous(limits = c(-1.3, 2)) +
+  scale_y_continuous(limits = c(-1.1, 2)) +
+  labs(title="Residual plots of HAR_RV for AUDUSD against EURUSD", y="residuals AUDUSD", x="residuals EURUSD") +
+  theme_classic() +
+  theme(axis.title = element_text(size= 12.5),
+        axis.text = element_text(size= 11.5),
+        legend.title = element_text(size= 11),
+        legend.text = element_text(size= 11))
+```
+```{r}
+gumbel_copula_p2 <- pMvdc(x=as.matrix(data.frame(residuals(EU_HAR_in_model), residuals(AU_HAR_in_model))), gumbel_dist)
+hist(gumbel_copula_p2)
+mean((gumbel_copula_p > 0.95 | gumbel_copula_p < 0.05))
+
+# define function that computes LS score
+copula_LS_score <- function(y, object){
+  fy = dMvdc(y, object)
+  return(-log(fy))
+}
+
+mean(copula_LS_score(as.matrix(data.frame(res1=residuals(EU_HAR_in_model), res2=residuals(AU_HAR_in_model))), gumbel_dist))
+
+
+#gumbel_copula_p <- BiCopCDF(u1=var_a, u2=var_b, selectedCopula)
+#hist(gumbel_copula_p)
+#mean((gumbel_copula_p > 0.95 | gumbel_copula_p < 0.05))
+
+#copula_LS_score <- function(u1, u2, Copula){
+#  fy = BiCopPDF(u1=u1, u2=u2, selectedCopula)
+#  return(-log(fy))
+#}
+#mean(copula_LS_score(var_a, var_b, selectedCopula))
+```
+```{r}
+# Define function that computes the one-day forecast of the HAR model
+copula_har_prob <- function(train_start, train_end, rv1, rv2, copula){
+  RV1 <- comp_har_pred(train_start, train_end, rv1)
+  RV2 <- comp_har_pred(train_start, train_end, rv2)
+  # Get models
+  RV1_model = RV1$model
+  RV2_model = RV2$model
+  RV1_pred = RV1$pred
+  RV2_pred = RV2$pred
+  aic1 <- stepAIC.ghyp(RV1_model$residuals)
+  aic2 <- stepAIC.ghyp(RV2_model$residuals)
+  best_model1 <- aic1$best.model
+  best_model2 <- aic2$best.model
+  VR_model1 <- fit.NIGuv(RV1_model$residuals)
+  VR_model2 <- fit.NIGuv(RV2_model$residuals)
+  mul_dat <- data.frame(res1 = RV1_model$residuals, RV2_model$residuals)
+  pred_dat <- as.matrix(data.frame(res1=rv1[train_end+2]-RV1_pred, res2= rv2[train_end+2]-RV2_pred))
+  opt_coeff <- coef(fitCopula(copula(dim = 2), pobs(as.matrix(mul_dat)), method = 'ml'))
+  # Build the bivariate distribution
+  copula_dist_best <- mvdc(copula(param = opt_coeff, dim = 2), 
+                           margins = c("ghyp","ghyp"), 
+                           paramMargins = list(list(object=best_model1), 
+                                               list(object=best_model2)))
+  copula_dist_VR <- mvdc(copula(param = opt_coeff, dim = 2), 
+                         margins = c("ghyp","ghyp"), 
+                         paramMargins = list(list(object=VR_model1), 
+                                             list(object=VR_model2)))
+  
+  # Get PIT diagram
+  PIT_copula_best <- pMvdc(x=pred_dat, copula_dist_best)
+  PIT_copula_VR <- pMvdc(x=pred_dat, copula_dist_VR)
+  # Get LS score
+  best_LS <- copula_LS_score(as.matrix(pred_dat), copula_dist_best)
+  VR_LS <- copula_LS_score(as.matrix(pred_dat), copula_dist_VR)
+  
+  # Return the fitted model and the one-day forecast
+  return(list(PIT=c(PIT_copula_best, PIT_copula_VR), LS = c(best_LS, VR_LS)))
+}
+
+# Define function that plot PIT for each prob forecast
+copula_outprob_PIT <- function(outprob_results){
+  PIT <- matrix(nrow = 43, ncol = 2)
+  colnames(PIT) <- c("best", "VR")
+  for (i in 1:43){
+    PIT[i,] = outprob_results[[i]][["PIT"]]
+  }
+  best_PIT = hist(PIT[,1], main='PIT histogram of best distirbution', xlab="PIT")
+  VR_PIT = hist(PIT[,2], main='PIT histogram of VR distirbution', xlab="PIT")
+  return(list(best_PIT=best_PIT, VR_PIT = VR_PIT))
+}
+
+# Define function that computes LS score for each prob forecast
+copula_outprob_LS <- function(outprob_results){
+  LS <- matrix(nrow = 43, ncol = 2)
+  colnames(LS) <- c("best", "VR")
+  for (i in 1:43){
+    LS[i,] = outprob_results[[i]][["LS"]]
+    }
+  return(colMeans(LS))
+  }
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+gumbel_copula_outprob <- lapply(EU_roll_start:EU_roll_end, function(x){copula_har_prob(x-train_length, x, log(bi_dat$EU_RV), log(bi_dat$AU_RV), gumbelCopula)})
+```
+```{r}
+copula_outprob_PIT(gumbel_copula_outprob)
+copula_outprob_LS(gumbel_copula_outprob)
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+frank_copula_outprob <- lapply(EU_roll_start:EU_roll_end, function(x){copula_har_prob(x-train_length, x, log(bi_dat$EU_RV), log(bi_dat$AU_RV), frankCopula)})
+```
+```{r}
+copula_outprob_PIT(frank_copula_outprob)
+copula_outprob_LS(frank_copula_outprob)
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+clayton_copula_outprob <- lapply(EU_roll_start:EU_roll_end, function(x){copula_har_prob(x-train_length, x, log(bi_dat$EU_RV), log(bi_dat$AU_RV), claytonCopula)})
+```
+```{r}
+copula_outprob_PIT(clayton_copula_outprob)
+copula_outprob_LS(clayton_copula_outprob)
+```
+
+
+```{r}
+plot1 <- ggplot() +
+  geom_point(data = data.frame(res1=residuals(EU_HAR_in_model), 
+                               res2=residuals(AU_HAR_in_model)), aes(x=res1, y=res2), size=0.4) +
+  geom_density_2d_filled(data = data.frame(rghyp(10000, mul_in_res_distr$all.models[[11]])), aes(x=res1, y=res2), contour_var='ndensity', alpha=0.4) +
+  scale_x_continuous(limits = c(-1.3, 2)) +
+  scale_y_continuous(limits = c(-1.1, 2)) +
+  labs(title="Fitted Bivariate Normal", y="residuals AUDUSD", x="residuals EURUSD") +
+  theme_classic() +
+  theme(axis.title = element_text(size= 12.5),
+        axis.text = element_text(size= 11.5),
+        legend.position = 'none')
+plot2 <- ggplot() +
+  geom_point(data = data.frame(res1=residuals(EU_HAR_in_model), 
+                               res2=residuals(AU_HAR_in_model)), aes(x=res1, y=res2), size=0.4) +
+  geom_density_2d_filled(data = data.frame(rghyp(10000, mul_in_res_distr$all.models[[9]])), aes(x=res1, y=res2), contour_var='ndensity', alpha=0.4) +
+  scale_x_continuous(limits = c(-1.3, 2)) +
+  scale_y_continuous(limits = c(-1.1, 2)) +
+  labs(title="Fitted Bivariate Symmetric NIG", y="residuals AUDUSD", x="residuals EURUSD") +
+  theme_classic() +
+  theme(axis.title = element_text(size= 12.5),
+        axis.text = element_text(size= 11.5),
+        legend.title = element_text(size= 11),
+        legend.text = element_text(size= 11))
+plot3 <- ggplot() +
+  geom_point(data = data.frame(res1=residuals(EU_HAR_in_model), 
+                               res2=residuals(AU_HAR_in_model)), aes(x=res1, y=res2), size=0.4) +
+  geom_density_2d_filled(data = data.frame(rghyp(10000, mul_in_res_distr$best.model)), aes(x=res1, y=res2), contour_var='ndensity', alpha=0.4) +
+  scale_x_continuous(limits = c(-1.3, 2)) +
+  scale_y_continuous(limits = c(-1.1, 2)) +
+  labs(title="Fitted Bivariate Asymmetric NIG", y="residuals AUDUSD", x="residuals EURUSD") +
+  theme_classic() +
+  theme(axis.title = element_text(size= 12.5),
+        axis.text = element_text(size= 11.5),
+        legend.position = 'none')
+plot4 <- ggplot() +
+  geom_point(data = data.frame(res1=residuals(EU_HAR_in_model), 
+                               res2=residuals(AU_HAR_in_model)), aes(x=res1, y=res2), size=0.4) +
+  geom_density_2d_filled(data = data.frame(v), aes(x=v[,1], y=v[,2]), contour_var='ndensity', alpha=0.4) +
+  scale_x_continuous(limits = c(-1.3, 2)) +
+  scale_y_continuous(limits = c(-1.1, 2)) +
+  labs(title="Fitted Gumbel Copula", y="residuals AUDUSD", x="residuals EURUSD") +
+  theme_classic() +
+  theme(axis.title = element_text(size= 12.5),
+        axis.text = element_text(size= 11.5),
+        legend.position = 'none')
+```
+```{r}
+library(cowplot)
+plot_grid(plot1, plot2, plot3, plot4, ncol = 2, align = "hv", axis = "tblr")
+```
+
+

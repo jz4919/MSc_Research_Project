@@ -1,0 +1,186 @@
+---
+title: "multivariate_residual_distribution"
+author: "CID: 01714151"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# define function that computes LS score
+comp_LS_score <- function(y, object){
+  fy = dghyp(y, object)
+  return(-log(fy))
+}
+```
+
+```{r}
+# Estimate the model on full data sample
+EU_HAR_in_model <- comp_har_pred(22, 256, log(bi_dat$EU_RV))$model
+AU_HAR_in_model <- comp_har_pred(22, 256, log(bi_dat$AU_RV))$model
+
+```
+
+## marginal distribution
+```{r}
+ggplot() +
+  # Add a histogram layer
+  geom_histogram(aes(x = residuals(EU_HAR_in_model), y = after_stat(density)), bins = 15, fill = "steelblue", alpha=0.5) +
+  geom_histogram(aes(x = residuals(AU_HAR_in_model), y = after_stat(density)), bins = 15, fill = "orange",alpha=0.5) +
+  # Add a stat_function layer to plot the normal distribution curve
+   stat_function(
+    fun = function(x) dghyp(x, object = res1_distr$best.model),
+    aes(color = "EURUSD"), linewidth = 0.75
+  ) +
+  stat_function(
+    fun = function(x) dghyp(x, object = res2_distr$best.model),
+    aes(color = "AUDUSD"), linewidth = 0.75
+  ) +
+  # Customize color and size aesthetics
+  scale_color_manual(values = c("EURUSD" = "steelblue", "AUDUSD" = "darkorange")) +
+  labs(title = NULL,
+       x = "Residuals for multivariate HAR_RV", y = "Density") +
+    theme_classic() +
+    theme(axis.title = element_text(size= 12.5),
+          axis.text = element_text(size= 11.5),
+          legend.title = element_blank(),
+          legend.text = element_text(size= 11),
+          legend.position = c(0.9, 0.85))
+```
+
+## in-sample prob forecast
+### HAR
+```{r message=FALSE, warning=FALSE, include=FALSE}
+library(ghyp)
+mul_in_res_distr <- stepAIC.ghyp(data.frame(res1=residuals(EU_HAR_in_model), #HAR_RV_multi$model1
+                                            res2=residuals(AU_HAR_in_model))) #HAR_RV_multi$model2
+```
+```{r}
+mul_in_res_distr$fit.table
+mul_in_res_distr$best.model
+```
+```{r}
+grid.arrange(
+ggplot() +
+  geom_point(data = data.frame(res1=residuals(EU_HAR_in_model), 
+                               res2=residuals(AU_HAR_in_model)), aes(x=res1, y=res2), size=0.4) +
+  geom_density_2d_filled(data = data.frame(rghyp(10000, mul_in_res_distr$all.models[[11]])), aes(x=res1, y=res2), contour_var='ndensity', alpha=0.4) +
+  scale_x_continuous(limits = c(-1.3, 2)) +
+  scale_y_continuous(limits = c(-1.1, 2)) +
+  labs(title="Fitted Bivariate Normal", y="residuals AUDUSD", x="residuals EURUSD") +
+  theme_classic() +
+  theme(axis.title = element_text(size= 12.5),
+        axis.text = element_text(size= 11.5),
+        legend.title = element_text(size= 11),
+        legend.text = element_text(size= 11)),
+ggplot() +
+  geom_point(data = data.frame(res1=residuals(EU_HAR_in_model), 
+                               res2=residuals(AU_HAR_in_model)), aes(x=res1, y=res2), size=0.4) +
+  geom_density_2d_filled(data = data.frame(rghyp(10000, mul_in_res_distr$all.models[[9]])), aes(x=res1, y=res2), contour_var='ndensity', alpha=0.4) +
+  scale_x_continuous(limits = c(-1.3, 2)) +
+  scale_y_continuous(limits = c(-1.1, 2)) +
+  labs(title="Fitted Bivariate Symmetric NIG", y="residuals AUDUSD", x="residuals EURUSD") +
+  theme_classic() +
+  theme(axis.title = element_text(size= 12.5),
+        axis.text = element_text(size= 11.5),
+        legend.title = element_text(size= 11),
+        legend.text = element_text(size= 11)),
+ggplot() +
+  geom_point(data = data.frame(res1=residuals(EU_HAR_in_model), 
+                               res2=residuals(AU_HAR_in_model)), aes(x=res1, y=res2), size=0.4) +
+  geom_density_2d_filled(data = data.frame(rghyp(10000, mul_in_res_distr$best.model)), aes(x=res1, y=res2), contour_var='ndensity', alpha=0.4) +
+  scale_x_continuous(limits = c(-1.3, 2)) +
+  scale_y_continuous(limits = c(-1.1, 2)) +
+  labs(title="Fitted Bivariate Asymmetric NIG", y="residuals AUDUSD", x="residuals EURUSD") +
+  theme_classic() +
+  theme(axis.title = element_text(size= 12.5),
+        axis.text = element_text(size= 11.5),
+        legend.title = element_text(size= 11),
+        legend.text = element_text(size= 11)), nrow=1)
+```
+
+```{r}
+mul_in_prob_gauss <- pghyp(data.frame(res1=residuals(EU_HAR_in_model), res2=residuals(AU_HAR_in_model)), mul_in_res_distr$all.models[[11]])
+hist(mul_in_prob_gauss)
+mean((mul_in_prob_gauss > 0.95 | mul_in_prob_gauss < 0.05))
+
+mul_in_prob_sym_VR <- pghyp(data.frame(res1=residuals(EU_HAR_in_model), res2=residuals(AU_HAR_in_model)), mul_in_res_distr$all.models[[9]])
+hist(mul_in_prob_sym_VR)
+mean((mul_in_prob_sym_VR > 0.95 | mul_in_prob_gauss < 0.05))
+
+mul_in_prob_best <- pghyp(data.frame(res1=residuals(EU_HAR_in_model), res2=residuals(AU_HAR_in_model)), mul_in_res_distr$best.model)
+hist(mul_in_prob_best)
+mean((mul_in_prob_best > 0.95 | mul_in_prob_best < 0.05))
+```
+```{r}
+mean(comp_LS_score(as.matrix(data.frame(res1=residuals(EU_HAR_in_model), res2=residuals(AU_HAR_in_model))), mul_in_res_distr$all.models[[11]]))
+
+mean(comp_LS_score(as.matrix(data.frame(res1=residuals(EU_HAR_in_model), res2=residuals(AU_HAR_in_model))), mul_in_res_distr$all.models[[9]]))
+
+mean(comp_LS_score(as.matrix(data.frame(res1=residuals(EU_HAR_in_model), res2=residuals(AU_HAR_in_model))), mul_in_res_distr$best.model))
+```
+
+## out-of-sample prob forecast
+```{r}
+# Define function that computes the one-day forecast of the HAR model
+comp_har_prob <- function(train_start, train_end, rv1, rv2){
+  RV1 <- comp_har_pred(train_start, train_end, rv1)
+  RV2 <- comp_har_pred(train_start, train_end, rv2)
+  # Get models
+  RV1_model = RV1$model
+  RV2_model = RV2$model
+  RV1_pred = RV1$pred
+  RV2_pred = RV2$pred
+  aic.mv <- stepAIC.ghyp(data.frame(res1=RV1_model$residuals, res2=RV2_model$residuals))
+  best_model <- aic.mv$best.model
+  gauss_model <- fit.gaussmv(data.frame(res1=RV1_model$residuals, res2=RV2_model$residuals))
+  NIG_model <- fit.NIGmv(data.frame(res1=RV1_model$residuals, res2=RV2_model$residuals))
+  # Get PIT diagram
+  best_PIT <- pghyp(data.frame(res1=rv1[train_end+2]-RV1_pred, res2=rv2[train_end+2]-RV2_pred), best_model)
+  gauss_PIT <- pghyp(data.frame(res1=rv1[train_end+2]-RV1_pred, res2= rv2[train_end+2]-RV2_pred), gauss_model)
+  NIG_PIT <- pghyp(data.frame(res1= rv1[train_end+2]-RV1_pred, res2= rv2[train_end+2]-RV2_pred), NIG_model)
+  # Get LS score
+  best_LS <- comp_LS_score(data.frame(res1= rv1[train_end+2]-RV1_pred, res2= rv2[train_end+2]-RV2_pred), best_model)
+  gauss_LS <- comp_LS_score(data.frame(res1= rv1[train_end+2]-RV1_pred, res2= rv2[train_end+2]-RV2_pred), gauss_model)
+  NIG_LS <- comp_LS_score(data.frame(res1= rv1[train_end+2]-RV1_pred, res2= rv2[train_end+2]-RV2_pred), NIG_model)
+  # Return the fitted model and the one-day forecast
+  return(list(pred=c(RV1_pred, RV2_pred), PIT=c(gauss_PIT, NIG_PIT, best_PIT), LS = c(gauss_LS, NIG_LS, best_LS)))
+}
+
+# Define function that plot PIT for each prob forecast
+outprob_PIT <- function(outprob_results){
+  PIT <- matrix(nrow = 43, ncol = 3)
+  colnames(PIT) <- c("gauss", "NIG", "best")
+  for (i in 1:43){
+    PIT[i,] = outprob_results[[i]][["PIT"]]
+  }
+  gauss_PIT = hist(PIT[,1], main='PIT histogram of gauss distirbution', xlab="PIT")
+  NIG_PIT = hist(PIT[,2], main='PIT histogram of NIG distirbution', xlab="PIT")
+  best_PIT = hist(PIT[,3], main='PIT histogram of the best distribution', xlab="PIT")
+  return(list(gauss_PIT=gauss_PIT, NIG_PIT = NIG_PIT, best_PIT=best_PIT))
+}
+
+# Define function that computes LS score for each prob forecast
+outprob_LS <- function(outprob_results){
+  LS <- matrix(nrow = 43, ncol = 3)
+  colnames(LS) <- c("gauss", "NIG", "best")
+  for (i in 1:43){
+    LS[i,] = outprob_results[[i]][["LS"]]
+    }
+  return(colMeans(LS))
+  }
+```
+
+```{r message=TRUE, include=FALSE}
+mul_HAR_outprob <- lapply(EU_roll_start:EU_roll_end, function(x){comp_har_prob(x-train_length, x, log(bi_dat$EU_RV), log(bi_dat$AU_RV))})
+```
+```{r}
+outprob_PIT(mul_HAR_outprob)
+outprob_LS(mul_HAR_outprob)
+```
+

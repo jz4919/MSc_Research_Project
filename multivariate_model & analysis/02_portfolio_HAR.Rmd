@@ -1,0 +1,233 @@
+---
+title: "multivariate_HAR_RV"
+author: "CID: 01714151"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Define functions for model fitting and forecasting
+```{r}
+# Define the constant parameters
+mu1 = sqrt(2/pi)
+theta = (pi^2/4)+pi-5
+sigma = 1/288
+
+# Define function that computes RV_{t:t-k} for different periods k
+comp_mean <- function(index, period, dat){
+  idx_end = index
+  idx_start = index - period + 1
+  return(mean(dat[idx_start:idx_end]))
+}
+
+comp_port_RV <- function(rv1, rv2, cov, w=1/2){
+  return(w^2*rv1+(1-w)^2*rv2+2*w*(1-w)*cov)
+}
+
+# Define function that computes the one-day forecast of the HAR model
+comp_har_pred <- function(train_start=22, train_end, dat){
+  # Obtain RV_{t+1} as the training y
+  y = dat[(train_start+1):(train_end+1)]
+  # Obtain RV_{t}, RV_{t:t-4}, RV_{t:t-22} as the training X
+  x_d = dat[train_start:train_end]
+  x_w = unlist(lapply(train_start:train_end, function(index){comp_mean(index, period=5, dat=dat)}))
+  x_m = unlist(lapply(train_start:train_end, function(index){comp_mean(index, period=22, dat=dat)}))
+  # Fit the HAR model with the training model
+  har = lm(y~x_d + x_w + x_m)
+  # Make prediction on RV_{t+2}
+  pred = predict(har, data.frame(x_d=dat[train_end+1], x_w=comp_mean(train_end+1, 5, dat), x_m=comp_mean(train_end+1, 22, dat)))
+  # Return the fitted model and the one-day forecast
+  return(list(pred=pred, model=har))
+}
+
+# Define function that computes the one-day forecast of the HAR model of only daily data
+comp_dhar_pred <- function(train_start=22, train_end, dat){
+  # Obtain RV_{t+1} as the training y
+  y = dat[(train_start+1):(train_end+1)]
+  # Obtain RV_{t}, RV_{t:t-4}, RV_{t:t-22} as the training X
+  x_d = dat[train_start:train_end]
+  # Fit the HAR model with the training model
+  lm = lm(y~x_d)
+  # Make prediction on RV_{t+2}
+  pred = predict(lm, data.frame(x_d=dat[train_end+1]), interval='confidence', level=0.95)
+  # Return the fitted model and the one-day forecast
+  return(list(pred=pred, model=lm))
+}
+```
+
+## Dataset construction
+```{r}
+comp_cov <- function(index){
+  dat <- merge(EU_dat[[index]], AU_dat[[index]], by='datetime', all.x = TRUE, all.y = TRUE) %>%
+    mutate(sum_return = log_return.x + log_return.y) %>%
+    mutate(sub_return = log_return.x - log_return.y) %>%
+    mutate(raw_rbpcv = abs(sum_return*lag(sum_return)) -  abs(sub_return*lag(sub_return))) %>%
+    mutate(sum_price = 0.5*price.x + 0.5*price.y) %>%
+    mutate(sum_return = log(sum_price) - lag(log(sum_price))) %>%
+    na.omit()
+  date = lubridate::date(dat$datetime[1])
+  EU_RV = sum(dat$log_return.x^2)
+  AU_RV = sum(dat$log_return.y^2)
+  port_RV_uni = sum(dat$sum_return^2)
+  cov = sum(dat$log_return.x*dat$log_return.y)
+  port_RV_mul = comp_port_RV(EU_RV, AU_RV, cov, w=1/2)
+  rbpcv12 = 288/287*1/4*sum(dat$raw_rbpcv)
+  rbpcv11 = 288/287*sum(dat$bpv.x)
+  rbpcv22 = 288/287*sum(dat$bpv.y)
+  jump11 = max(0, EU_RV-mu1^(-2)*rbpcv11)
+  jump22 = max(0, AU_RV-mu1^(-2)*rbpcv22)
+  jump12 = cov-mu1^(-2)*rbpcv12
+  return(c(EU_RV, AU_RV, port_RV_uni, cov, port_RV_mul, rbpcv11, rbpcv22, rbpcv12, jump11, jump22, jump12))
+}
+
+bi_dat <- do.call(rbind, lapply(1:257, comp_cov))
+bi_dat <- as.data.frame(bi_dat)
+bi_dat <- cbind(EU_daily$date, bi_dat)
+colnames(bi_dat) <- c("date", "EU_RV", "AU_RV", "port_RV_uni", "cov", "port_RV_mul", "rbpcv11", "rbpcv22", "rbpcv12", "jump11", "jump22", "jump12")
+```
+
+### RV_HAR_uni
+```{r}
+# Estimate the model on full data sample
+HAR_RV_uni_in <- comp_har_pred(22, 256, bi_dat$port_RV_uni)
+HAR_RV_uni_df <- data.frame(date=bi_dat$date[23:257], uni_pred=predict(HAR_RV_uni_in$model), true=bi_dat$port_RV_mul[23:257])
+mean((HAR_RV_uni_df$true - HAR_RV_uni_df$uni_pred)^2)
+```
+
+### RV_HAR_multi
+```{r}
+comp_in_pred <- function(func, true, rv1, rv2, cov){
+  RV1_in <- func(22, 256, rv1)
+  RV2_in <- func(22, 256, rv2)
+  cov_in <- func(22, 256, cov)
+  df <- data.frame(
+    date = bi_dat$date[23:257],
+    true = true,
+    RV1_pred = predict(RV1_in$model), 
+    RV2_pred = predict(RV2_in$model),
+    cov_pred = predict(cov_in$model),
+    bi_pred = comp_port_RV(predict(RV1_in$model), 
+                           predict(RV2_in$model), 
+                           predict(cov_in$model)))
+  return(list(model1=RV1_in$model, model2=RV2_in$model, model3=cov_in$model, pred_df = df))
+}
+
+HAR_RV_multi <-  comp_in_pred(comp_har_pred, bi_dat$port_RV_uni[23:257], 
+                              bi_dat$EU_RV, bi_dat$AU_RV, bi_dat$cov)
+HAR_RV_multi_df <- HAR_RV_multi$pred_df
+
+mean((HAR_RV_multi_df$true - HAR_RV_multi_df$bi_pred)^2)
+```
+
+```{r eval=FALSE, include=FALSE}
+EU_HAR_RV_in <- comp_har_pred(22, 256, bi_dat$EURUSD_RV)
+AU_HAR_RV_in <- comp_har_pred(22, 256, bi_dat$AUDUSD_RV)
+Cov_HAR_RV_in <- comp_har_pred(22, 256, bi_dat$cov)
+port_HAR_RV_in <- comp_har_pred(22, 256, bi_dat$portfolio_RV)
+bi_HAR_RV <- data.frame(
+  date=bi_dat$date[23:257],
+  true=bi_dat$portfolio_RV[23:257],
+  cov_pred=comp_port_RV(predict(EU_HAR_RV_in$model), 
+                        predict(AU_HAR_RV_in$model), 
+                        predict(Cov_HAR_RV_in$model)),
+  port_pred=predict(port_HAR_RV_in$model))
+```
+
+### RV_BV+J/dJ_multi
+```{r}
+HAR_BV <- comp_in_pred(comp_har_pred, bi_dat$port_RV_uni[23:257], mu1^(-2)*bi_dat$rbpcv11, mu1^(-2)*bi_dat$rbpcv22, mu1^(-2)*bi_dat$rbpcv12)
+HAR_BV_df <- HAR_BV$pred_df
+
+HAR_J <- comp_in_pred(comp_har_pred, bi_dat$port_RV_uni[23:257], 
+                      bi_dat$jump11, bi_dat$jump22, bi_dat$jump12)
+HAR_dJ <- comp_in_pred(comp_dhar_pred, bi_dat$port_RV_uni[23:257], 
+                       bi_dat$jump11, bi_dat$jump22, bi_dat$jump12)
+HAR_J_df <- HAR_J$pred_df
+HAR_dJ_df <- HAR_dJ$pred_df
+
+HAR_BVJ_df <- data.frame(date=HAR_BV_df$date, true=HAR_BV_df$true, 
+                         RV1_pred = HAR_BV_df$RV1_pred + HAR_J_df$RV1_pred,
+                         RV2_pred = HAR_BV_df$RV2_pred + HAR_J_df$RV2_pred,
+                         cov_pred = HAR_BV_df$cov_pred + HAR_J_df$cov_pred) %>%
+  mutate(bi_pred = comp_port_RV(RV1_pred, RV2_pred, cov_pred))
+
+HAR_BVdJ_df <- data.frame(date=HAR_BV_df$date, true=HAR_BV_df$true, 
+                          RV1_pred = HAR_BV_df$RV1_pred + HAR_dJ_df$RV1_pred,
+                          RV2_pred = HAR_BV_df$RV2_pred + HAR_dJ_df$RV2_pred,
+                          cov_pred = HAR_BV_df$cov_pred + HAR_dJ_df$cov_pred) %>%
+  mutate(bi_pred = comp_port_RV(RV1_pred, RV2_pred, cov_pred))
+
+mean((HAR_BVJ_df$true-HAR_BVJ_df$bi_pred)^2)
+mean((HAR_BVdJ_df$true-HAR_BVdJ_df$bi_pred)^2)
+
+dm.test(HAR_RV_uni_df$true-HAR_RV_uni_df$uni_pred, HAR_RV_multi_df$true-HAR_RV_multi_df$bi_pred, alternative='greater', power=2)$p.value
+dm.test(HAR_RV_uni_df$true-HAR_RV_uni_df$uni_pred, HAR_BVJ_df$true-HAR_BVJ_df$bi_pred, alternative='greater', power=2)$p.value
+dm.test(HAR_RV_uni_df$true-HAR_RV_uni_df$uni_pred, HAR_BVdJ_df$true-HAR_BVdJ_df$bi_pred, alternative='greater', power=2)$p.value
+```
+
+### out-of-sample
+```{r}
+# Obtain the start and end day of the rolling window
+EU_roll_start <- which(EU_daily$date=='2023-02-27')
+EU_roll_end <- dim(EU_daily)[1] - 2
+# Obtain the number of observations in each training data
+train_length <- EU_roll_start - 22
+
+# Define function that compute out of sample forecast
+comp_out_pred <- function(func, rv1, rv2, cov, 
+                          true=bi_dat$port_RV_uni[(EU_roll_start+2) : (EU_roll_end+2)]){
+  date <- EU_daily$date[(EU_roll_start+2) : (EU_roll_end+2)]
+  true <- true
+  RV1_pred <- unlist(lapply(EU_roll_start:EU_roll_end, function(x){comp_har_pred(x-train_length, x, rv1)$pred}))
+  RV2_pred <- unlist(lapply(EU_roll_start:EU_roll_end, function(x){comp_har_pred(x-train_length, x, rv2)$pred}))
+  cov_pred <- unlist(lapply(EU_roll_start:EU_roll_end, function(x){comp_har_pred(x-train_length, x, cov)$pred}))
+  bi_pred <- comp_port_RV(RV1_pred, RV2_pred, cov_pred)
+  dat <- data.frame(date=date, true=true, RV1_pred = RV1_pred, 
+                    RV2_pred = RV2_pred, cov_pred=cov_pred, bi_pred = bi_pred)
+  return(dat)
+}
+
+# Obtain the univariate out of sample forecast
+HAR_RV_uni_out <- data.frame(do.call(rbind, lapply(EU_roll_start:EU_roll_end, function(x){comp_har_pred(x-train_length, x, bi_dat$port_RV_uni)$pred})), row.names = NULL)
+HAR_RV_uni_out$date = bi_dat$date[(EU_roll_start+2) : (EU_roll_end+2)]
+HAR_RV_uni_out$true = bi_dat$port_RV_mul[(EU_roll_start+2) : (EU_roll_end+2)]
+mean((HAR_RV_uni_out$true-HAR_RV_uni_out$X1)^2)
+
+# Obtain the mulvaraite out of sample forecast for HAR_RV
+HAR_RV_out_df <-  comp_out_pred(comp_har_pred, bi_dat$EU_RV, bi_dat$AU_RV, bi_dat$cov)
+mean((HAR_RV_out_df$true-HAR_RV_out_df$bi_pred)^2)
+
+# Obtain the mulvaraite out of sample forecast for HAR_BV+J/dJ
+HAR_BV_out_df <- comp_out_pred(comp_har_pred, mu1^(-2)*bi_dat$rbpcv11, mu1^(-2)*bi_dat$rbpcv22, mu1^(-2)*bi_dat$rbpcv12)
+HAR_J_out_df <- comp_out_pred(comp_har_pred, bi_dat$jump11, bi_dat$jump22, bi_dat$jump12)
+HAR_dJ_out_df <- comp_out_pred(comp_dhar_pred, bi_dat$jump11, bi_dat$jump22, bi_dat$jump12)
+
+HAR_BVJ_out_df <- data.frame(date=HAR_BV_out_df$date, true=HAR_BV_out_df$true, 
+                         RV1_pred = HAR_BV_out_df$RV1_pred + HAR_J_out_df$RV1_pred,
+                         RV2_pred = HAR_BV_out_df$RV2_pred + HAR_J_out_df$RV2_pred,
+                         cov_pred = HAR_BV_out_df$cov_pred + HAR_J_out_df$cov_pred) %>%
+  mutate(bi_pred = comp_port_RV(RV1_pred, RV2_pred, cov_pred))
+
+HAR_BVdJ_out_df <- data.frame(date=HAR_BV_out_df$date, true=HAR_BV_out_df$true, 
+                          RV1_pred = HAR_BV_out_df$RV1_pred + HAR_dJ_out_df$RV1_pred,
+                          RV2_pred = HAR_BV_out_df$RV2_pred + HAR_dJ_out_df$RV2_pred,
+                          cov_pred = HAR_BV_out_df$cov_pred + HAR_dJ_out_df$cov_pred) %>%
+  mutate(bi_pred = comp_port_RV(RV1_pred, RV2_pred, cov_pred))
+
+mean((HAR_BVJ_out_df$true-HAR_BVJ_out_df$bi_pred)^2)
+mean((HAR_BVdJ_out_df$true-HAR_BVdJ_out_df$bi_pred)^2)
+
+
+#dm.test(HAR_RV_out_df$true-HAR_RV_out_df$bi_pred, HAR_BVJ_out_df$true-HAR_BVJ_out_df$bi_pred, alternative='greater', power=2)$p.value
+#dm.test(HAR_RV_out_df$true-HAR_RV_out_df$bi_pred, HAR_BVdJ_out_df$true-HAR_BVdJ_out_df$bi_pred, alternative='greater', power=2)$p.value
+
+dm.test(HAR_RV_uni_out$true-HAR_RV_uni_out$X1, HAR_RV_out_df$true-HAR_RV_out_df$bi_pred, alternative='greater', power=2)$p.value
+dm.test(HAR_RV_uni_out$true-HAR_RV_uni_out$X1, HAR_BVJ_out_df$true-HAR_BVJ_out_df$bi_pred, alternative='greater', power=2)$p.value
+dm.test(HAR_RV_uni_out$true-HAR_RV_uni_out$X1, HAR_BVdJ_out_df$true-HAR_BVdJ_out_df$bi_pred, alternative='greater', power=2)$p.value
+```
+
